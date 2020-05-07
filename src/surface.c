@@ -46,6 +46,20 @@
 #include "v4l2.h"
 #include "video.h"
 
+
+
+static const struct try_formats {
+	unsigned int va_rt;
+	unsigned int v4l2_fmt;
+} try_formats [] = {
+	{VA_RT_FORMAT_YUV420, V4L2_PIX_FMT_NV12_COL128},
+	{VA_RT_FORMAT_YUV420, V4L2_PIX_FMT_SUNXI_TILED_NV12},
+	{VA_RT_FORMAT_YUV420, V4L2_PIX_FMT_NV12},
+	{VA_RT_FORMAT_YUV420_10, V4L2_PIX_FMT_NV12_10_COL128},
+	{0, 0}
+};
+
+
 VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 				unsigned int width, unsigned int height,
 				VASurfaceID *surfaces_ids,
@@ -68,22 +82,28 @@ VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 	bool found;
 	int rc;
 
-	if (format != VA_RT_FORMAT_YUV420)
-		return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
-
+//	if (format != VA_RT_FORMAT_YUV420)
+//		return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
 
         if (!driver_data->video_format) {
-		found = v4l2_find_format(driver_data->video_fd,
-					 V4L2_BUF_TYPE_VIDEO_CAPTURE,
-					 V4L2_PIX_FMT_SUNXI_TILED_NV12);
-		if (found)
-			video_format = video_format_find(V4L2_PIX_FMT_SUNXI_TILED_NV12);
+		found = false;
+		video_format = NULL;
+		for (i = 0; try_formats[i].va_rt != 0; ++i) {
+			if (try_formats[i].va_rt != format)
+				continue;
+			found = true;
 
-		found = v4l2_find_format(driver_data->video_fd,
-					 V4L2_BUF_TYPE_VIDEO_CAPTURE,
-					 V4L2_PIX_FMT_NV12);
-		if (found)
-			video_format = video_format_find(V4L2_PIX_FMT_NV12);
+			if (v4l2_find_format(driver_data->video_fd,
+					     V4L2_BUF_TYPE_VIDEO_CAPTURE,
+					     try_formats[i].v4l2_fmt))
+			{
+				video_format = video_format_find(try_formats[i].v4l2_fmt);
+				break;
+			}
+		}
+
+		if (!found)
+			return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
 
 		if (video_format == NULL)
 			return VA_STATUS_ERROR_OPERATION_FAILED;
@@ -507,8 +527,15 @@ VAStatus RequestExportSurfaceHandle(VADriverContextP context,
 			size += surface_object->destination_sizes[i];
 
 	for (i = 0; i < export_fds_count; i++) {
-		surface_descriptor->objects[i].drm_format_modifier =
-			video_format->drm_modifier;
+		uint64_t mod = video_format->drm_modifier;
+
+		// Fix up sand modifiers to contain col height
+		if (mod == DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT(0)) {
+			mod = DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT(
+				surface_object->destination_bytesperlines[i]);
+		}
+
+		surface_descriptor->objects[i].drm_format_modifier = mod;
 		surface_descriptor->objects[i].fd = export_fds[i];
 		surface_descriptor->objects[i].size = export_fds_count == 1 ?
 						      size :

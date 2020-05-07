@@ -36,6 +36,26 @@
 
 static struct video_format formats[] = {
 	{
+		.description		= "SAND YUV",
+		.v4l2_format		= V4L2_PIX_FMT_NV12_COL128,
+		.v4l2_buffers_count	= 1,
+		.v4l2_mplane		= false,
+		.drm_format		= DRM_FORMAT_NV12,
+		.drm_modifier		= DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT(0),
+		.planes_count		= 2,
+		.bpp			= 16,
+	},
+	{
+		.description		= "SAND30 YUV",
+		.v4l2_format		= V4L2_PIX_FMT_NV12_10_COL128,
+		.v4l2_buffers_count	= 1,
+		.v4l2_mplane		= false,
+		.drm_format		= DRM_FORMAT_NV12,
+		.drm_modifier		= DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT(0),
+		.planes_count		= 2,
+		.bpp			= 20,
+	},
+	{
 		.description		= "NV12 YUV",
 		.v4l2_format		= V4L2_PIX_FMT_NV12,
 		.v4l2_buffers_count	= 1,

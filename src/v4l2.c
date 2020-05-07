@@ -452,7 +452,7 @@ int v4l2_set_control(int video_fd, int request_fd, unsigned int id, void *data,
 
 	rc = ioctl(video_fd, VIDIOC_S_EXT_CTRLS, &controls);
 	if (rc < 0) {
-		request_log("Unable to set control: %s\n", strerror(errno));
+		request_log("Unable to set control %d: %s\n", id, strerror(errno));
 		return -1;
 	}
 

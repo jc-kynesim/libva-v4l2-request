@@ -150,7 +150,8 @@ VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP context)
 	if (video_path == NULL)
 		video_path = "/dev/video0";
 
-	video_fd = open(video_path, O_RDWR | O_NONBLOCK);
+//	video_fd = open(video_path, O_RDWR | O_NONBLOCK);
+	video_fd = open(video_path, O_RDWR);
 	if (video_fd < 0)
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 
