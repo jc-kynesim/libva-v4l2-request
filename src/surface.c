@@ -169,25 +169,64 @@ VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 		 */
 
 		if (video_format->v4l2_buffers_count == 1) {
-			destination_sizes[0] = destination_bytesperlines[0] *
-					       format_height;
+			switch (video_format->v4l2_format) {
+			case V4L2_PIX_FMT_NV12_COL128:
+				/* modifiers are per buffer so only 1 needed */
+				surface_object->destination_modifiers[0] = DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT(destination_bytesperlines[0]);
+				/*
+				 * What do we actually mean by plane size here?
+				 * A plausible argument could be made for {<total_size>, 0}
+				 * But it is probaly best to fake up something with a
+				 * geometry that looks like a 'normal' NV12 layout
+				 */
+				surface_object->destination_sizes[0] = format_width * format_height;
+				surface_object->destination_sizes[1] = destination_sizes[0] - surface_object->destination_sizes[0];
+				surface_object->destination_offsets[0] = 0;
+				surface_object->destination_offsets[1] = format_height * 128;
+				surface_object->destination_data[0] = (unsigned char *)surface_object->destination_map[0];
+				surface_object->destination_data[1] = surface_object->destination_data[0] + surface_object->destination_offsets[1];
+				/* To work around assertions in some code make bytesperline >= width */
+				surface_object->destination_bytesperlines[0] = format_width;
+				surface_object->destination_bytesperlines[1] = format_width;
+				break;
+			case V4L2_PIX_FMT_NV12_10_COL128:
+				surface_object->destination_modifiers[0] = DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT(destination_bytesperlines[0]);
+				surface_object->destination_sizes[0] = format_width * format_height * 4 / 3;
+				surface_object->destination_sizes[1] = destination_sizes[0] - surface_object->destination_sizes[0];
+				surface_object->destination_offsets[0] = 0;
+				surface_object->destination_offsets[1] = format_height * 128;
+				surface_object->destination_data[0] = (unsigned char *)surface_object->destination_map[0];
+				surface_object->destination_data[1] = surface_object->destination_data[0] + surface_object->destination_offsets[1];
+				surface_object->destination_bytesperlines[0] = format_width * 4 / 3;
+				surface_object->destination_bytesperlines[1] = format_width * 4 / 3;
+				break;
+			default:
+				surface_object->destination_modifiers[0] =
+					video_format->drm_modifier;
 
-			for (j = 1; j < destination_planes_count; j++)
-				destination_sizes[j] = destination_sizes[0] / 2;
+				destination_sizes[0] = destination_bytesperlines[0] *
+						       format_height;
 
-			for (j = 0; j < destination_planes_count; j++) {
-				surface_object->destination_offsets[j] =
-					j > 0 ? destination_sizes[j - 1] : 0;
-				surface_object->destination_data[j] =
-					((unsigned char *)surface_object->destination_map[0] +
-					 surface_object->destination_offsets[j]);
-				surface_object->destination_sizes[j] =
-					destination_sizes[j];
-				surface_object->destination_bytesperlines[j] =
-					destination_bytesperlines[0];
+				for (j = 1; j < destination_planes_count; j++)
+					destination_sizes[j] = destination_sizes[0] / 2;
+
+				for (j = 0; j < destination_planes_count; j++) {
+					surface_object->destination_offsets[j] =
+						j > 0 ? destination_sizes[j - 1] : 0;
+					surface_object->destination_data[j] =
+						((unsigned char *)surface_object->destination_map[0] +
+						 surface_object->destination_offsets[j]);
+					surface_object->destination_sizes[j] =
+						destination_sizes[j];
+					surface_object->destination_bytesperlines[j] =
+						destination_bytesperlines[0];
+				}
+				break;
 			}
 		} else if (video_format->v4l2_buffers_count == destination_planes_count) {
 			for (j = 0; j < destination_planes_count; j++) {
+				surface_object->destination_modifiers[j] =
+					video_format->drm_modifier;
 				surface_object->destination_offsets[j] = 0;
 				surface_object->destination_data[j] =
 					surface_object->destination_map[j];
@@ -527,15 +566,8 @@ VAStatus RequestExportSurfaceHandle(VADriverContextP context,
 			size += surface_object->destination_sizes[i];
 
 	for (i = 0; i < export_fds_count; i++) {
-		uint64_t mod = video_format->drm_modifier;
-
-		// Fix up sand modifiers to contain col height
-		if (mod == DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT(0)) {
-			mod = DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT(
-				surface_object->destination_bytesperlines[i]);
-		}
-
-		surface_descriptor->objects[i].drm_format_modifier = mod;
+		surface_descriptor->objects[i].drm_format_modifier =
+		    surface_object[i].destination_modifiers[i];
 		surface_descriptor->objects[i].fd = export_fds[i];
 		surface_descriptor->objects[i].size = export_fds_count == 1 ?
 						      size :
