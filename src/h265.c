@@ -50,6 +50,7 @@ static void h265_fill_pps(VAPictureParameterBufferHEVC *picture,
 			  VASliceParameterBufferHEVC *slice,
 			  struct v4l2_ctrl_hevc_pps *pps)
 {
+	unsigned int i;
 	memset(pps, 0, sizeof(*pps));
 
 	if (slice->LongSliceFlags.fields.dependent_slice_segment_flag)
@@ -86,6 +87,10 @@ static void h265_fill_pps(VAPictureParameterBufferHEVC *picture,
 		pps->flags |= V4L2_HEVC_PPS_FLAG_ENTROPY_CODING_SYNC_ENABLED;
 	pps->num_tile_columns_minus1 = picture->num_tile_columns_minus1;
 	pps->num_tile_rows_minus1 = picture->num_tile_rows_minus1;
+	for (i = 0; i < pps->num_tile_columns_minus1; ++i)
+		pps->column_width_minus1[i] = picture->column_width_minus1[i];
+	for (i = 0; i < pps->num_tile_rows_minus1; ++i)
+		pps->row_height_minus1[i] = picture->row_height_minus1[i];
 	if (picture->pic_fields.bits.loop_filter_across_tiles_enabled_flag)
 		pps->flags |= V4L2_HEVC_PPS_FLAG_LOOP_FILTER_ACROSS_TILES_ENABLED;
 	if (picture->pic_fields.bits.pps_loop_filter_across_slices_enabled_flag)
@@ -217,6 +222,7 @@ static void h265_fill_slice_params(VAPictureParameterBufferHEVC *picture,
 	slice_params->data_bit_offset = data_bit_offset;
 	slice_params->nal_unit_type = nal_unit_type;
 	slice_params->nuh_temporal_id_plus1 = nuh_temporal_id_plus1;
+	slice_params->slice_segment_addr = slice->slice_segment_address;
 
 	slice_type = slice->LongSliceFlags.fields.slice_type;
 
@@ -225,6 +231,8 @@ static void h265_fill_slice_params(VAPictureParameterBufferHEVC *picture,
 		slice->LongSliceFlags.fields.color_plane_id;
 	slice_params->slice_pic_order_cnt =
 		picture->CurrPic.pic_order_cnt;
+	if (slice->LongSliceFlags.fields.dependent_slice_segment_flag)
+		slice_params->flags |= V4L2_HEVC_SLICE_PARAMS_FLAG_DEPENDENT_SLICE_SEGMENT;
 	if (slice->LongSliceFlags.fields.slice_sao_luma_flag)
 		slice_params->flags |= V4L2_HEVC_SLICE_PARAMS_FLAG_SLICE_SAO_LUMA;
 	if (slice->LongSliceFlags.fields.slice_sao_chroma_flag)
