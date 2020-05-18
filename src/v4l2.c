@@ -331,7 +331,8 @@ int v4l2_request_buffers(int video_fd, unsigned int type,
 
 int v4l2_queue_buffer(int video_fd, int request_fd, unsigned int type,
 		      struct timeval *timestamp, unsigned int index,
-		      unsigned int size, unsigned int buffers_count)
+		      unsigned int size, unsigned int buffers_count,
+		      bool hold_flag)
 {
 	struct v4l2_plane planes[buffers_count];
 	struct v4l2_buffer buffer;
@@ -356,6 +357,8 @@ int v4l2_queue_buffer(int video_fd, int request_fd, unsigned int type,
 	if (request_fd >= 0) {
 		buffer.flags = V4L2_BUF_FLAG_REQUEST_FD;
 		buffer.request_fd = request_fd;
+		if (hold_flag)
+			buffer.flags |= V4L2_BUF_FLAG_M2M_HOLD_CAPTURE_BUF;
 	}
 
 	if (timestamp != NULL)

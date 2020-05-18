@@ -86,6 +86,8 @@ struct object_surface {
 	} params;
 
 	int request_fd;
+	bool req_one;
+	bool needs_flush;
 };
 
 VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
@@ -125,5 +127,9 @@ VAStatus RequestUnlockSurface(VADriverContextP context, VASurfaceID surface_id);
 VAStatus RequestExportSurfaceHandle(VADriverContextP context,
 				    VASurfaceID surface_id, uint32_t mem_type,
 				    uint32_t flags, void *descriptor);
+
+struct request_data;
+struct object_surface;
+VAStatus queue_await_completion(struct request_data *driver_data, struct object_surface *surface_object, bool last);
 
 #endif

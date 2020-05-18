@@ -308,35 +308,16 @@ VAStatus RequestDestroySurfaces(VADriverContextP context,
 	return VA_STATUS_SUCCESS;
 }
 
-VAStatus RequestSyncSurface(VADriverContextP context, VASurfaceID surface_id)
+VAStatus queue_await_completion(struct request_data *driver_data, struct object_surface *surface_object, bool last)
 {
-	struct request_data *driver_data = context->pDriverData;
-	struct object_surface *surface_object;
 	VAStatus status;
-	struct video_format *video_format;
+	struct video_format *video_format = driver_data->video_format;
 	unsigned int output_type, capture_type;
 	int request_fd = -1;
 	int rc;
 
-	video_format = driver_data->video_format;
-	if (video_format == NULL) {
-		status = VA_STATUS_ERROR_OPERATION_FAILED;
-		goto error;
-	}
-
 	output_type = v4l2_type_video_output(video_format->v4l2_mplane);
 	capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
-
-	surface_object = SURFACE(driver_data, surface_id);
-	if (surface_object == NULL) {
-		status = VA_STATUS_ERROR_INVALID_SURFACE;
-		goto error;
-	}
-
-	if (surface_object->status != VASurfaceRendering) {
-		status = VA_STATUS_SUCCESS;
-		goto complete;
-	}
 
 	request_fd = surface_object->request_fd;
 	if (request_fd < 0) {
@@ -369,15 +350,17 @@ VAStatus RequestSyncSurface(VADriverContextP context, VASurfaceID surface_id)
 		goto error;
 	}
 
-	rc = v4l2_dequeue_buffer(driver_data->video_fd, -1, capture_type,
-				 surface_object->destination_index,
-				 surface_object->destination_buffers_count);
-	if (rc < 0) {
-		status = VA_STATUS_ERROR_OPERATION_FAILED;
-		goto error;
-	}
+	if (last) {
+		rc = v4l2_dequeue_buffer(driver_data->video_fd, -1, capture_type,
+					 surface_object->destination_index,
+					 surface_object->destination_buffers_count);
+		if (rc < 0) {
+			status = VA_STATUS_ERROR_OPERATION_FAILED;
+			goto error;
+		}
 
-	surface_object->status = VASurfaceDisplaying;
+		surface_object->status = VASurfaceDisplaying;
+	}
 
 	status = VA_STATUS_SUCCESS;
 	goto complete;
@@ -390,6 +373,26 @@ error:
 
 complete:
 	return status;
+}
+
+VAStatus RequestSyncSurface(VADriverContextP context, VASurfaceID surface_id)
+{
+	struct request_data *driver_data = context->pDriverData;
+	struct video_format *video_format;
+	struct object_surface *surface_object;
+
+	video_format = driver_data->video_format;
+	if (video_format == NULL)
+		return VA_STATUS_ERROR_OPERATION_FAILED;
+
+	surface_object = SURFACE(driver_data, surface_id);
+	if (surface_object == NULL)
+		return VA_STATUS_ERROR_INVALID_SURFACE;
+
+	if (surface_object->status != VASurfaceRendering)
+		return VA_STATUS_SUCCESS;
+
+	return queue_await_completion(driver_data, surface_object, true);
 }
 
 VAStatus RequestQuerySurfaceAttributes(VADriverContextP context,
@@ -422,7 +425,7 @@ VAStatus RequestQuerySurfaceAttributes(VADriverContextP context,
 	attributes_list[i].type = VASurfaceAttribMaxWidth;
 	attributes_list[i].flags = VA_SURFACE_ATTRIB_GETTABLE;
 	attributes_list[i].value.type = VAGenericValueTypeInteger;
-	attributes_list[i].value.value.i = 2048;
+	attributes_list[i].value.value.i = 4096;
 	i++;
 
 	attributes_list[i].type = VASurfaceAttribMinHeight;
@@ -434,7 +437,7 @@ VAStatus RequestQuerySurfaceAttributes(VADriverContextP context,
 	attributes_list[i].type = VASurfaceAttribMaxHeight;
 	attributes_list[i].flags = VA_SURFACE_ATTRIB_GETTABLE;
 	attributes_list[i].value.type = VAGenericValueTypeInteger;
-	attributes_list[i].value.value.i = 2048;
+	attributes_list[i].value.value.i = 4096;
 	i++;
 
 	attributes_list[i].type = VASurfaceAttribMemoryType;
