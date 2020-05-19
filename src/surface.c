@@ -42,6 +42,7 @@
 #include <linux/videodev2.h>
 
 #include "media.h"
+#include "config.h"
 #include "utils.h"
 #include "v4l2.h"
 #include "video.h"
@@ -84,6 +85,8 @@ VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 
 //	if (format != VA_RT_FORMAT_YUV420)
 //		return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
+
+	request_log("%s: rt_format=%#x\n", __func__, format);
 
         if (!driver_data->video_format) {
 		found = false;
@@ -395,6 +398,27 @@ VAStatus RequestSyncSurface(VADriverContextP context, VASurfaceID surface_id)
 	return queue_await_completion(driver_data, surface_object, true);
 }
 
+static int add_pixel_format_attributes(VASurfaceAttrib *const attributes_list,
+				       const VAProfile profile)
+{
+	switch (profile) {
+	default:
+		attributes_list[0].type = VASurfaceAttribPixelFormat;
+		attributes_list[0].flags = VA_SURFACE_ATTRIB_GETTABLE | VA_SURFACE_ATTRIB_SETTABLE;
+		attributes_list[0].value.type = VAGenericValueTypeInteger;
+		attributes_list[0].value.value.i = VA_FOURCC_NV12;
+		return 1;
+	case VAProfileHEVCMain10:
+		attributes_list[0].type = VASurfaceAttribPixelFormat;
+		attributes_list[0].flags = VA_SURFACE_ATTRIB_GETTABLE | VA_SURFACE_ATTRIB_SETTABLE;
+		attributes_list[0].value.type = VAGenericValueTypeInteger;
+		attributes_list[0].value.value.i = VA_FOURCC_P010;
+		return 1;
+	}
+	return 0;
+}
+
+
 VAStatus RequestQuerySurfaceAttributes(VADriverContextP context,
 				       VAConfigID config,
 				       VASurfaceAttrib *attributes,
@@ -406,15 +430,17 @@ VAStatus RequestQuerySurfaceAttributes(VADriverContextP context,
 					    sizeof(*attributes);
 	int memory_types;
 	unsigned int i = 0;
+	struct object_config *config_object;
+
+	config_object = CONFIG(driver_data, config);
+	if (config_object == NULL)
+		return VA_STATUS_ERROR_INVALID_CONFIG;
 
 	attributes_list = malloc(attributes_list_size);
 	memset(attributes_list, 0, attributes_list_size);
 
-	attributes_list[i].type = VASurfaceAttribPixelFormat;
-	attributes_list[i].flags = VA_SURFACE_ATTRIB_GETTABLE | VA_SURFACE_ATTRIB_SETTABLE;
-	attributes_list[i].value.type = VAGenericValueTypeInteger;
-	attributes_list[i].value.value.i = VA_FOURCC_NV12;
-	i++;
+	i += add_pixel_format_attributes(attributes_list + i,
+					 config_object->profile);
 
 	attributes_list[i].type = VASurfaceAttribMinWidth;
 	attributes_list[i].flags = VA_SURFACE_ATTRIB_GETTABLE;

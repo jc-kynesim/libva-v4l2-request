@@ -209,6 +209,68 @@ static void av_rpi_sand_to_planar_y(uint8_t * dst, const unsigned int dst_stride
     }
 }
 
+// Fetches a single patch - offscreen fixup not done here
+// w <= stride1
+// unclipped
+// _x & _w in pixels, strides in bytes
+// P010 has the data in the hi 10 bits of the u16
+void av_rpi_sand30_to_p010(uint8_t * dst, const unsigned int dst_stride,
+                             const uint8_t * src,
+                             unsigned int stride1, unsigned int stride2,
+                             unsigned int _x, unsigned int y,
+                             unsigned int _w, unsigned int h)
+{
+    const unsigned int x0 = (_x / 3) * 4; // Byte offset of the word
+    const unsigned int xskip0 = _x - (x0 >> 2) * 3;
+    const unsigned int x1 = ((_x + _w) / 3) * 4;
+    const unsigned int xrem1 = _x + _w - (x1 >> 2) * 3;
+    const unsigned int mask = stride1 - 1;
+    const uint8_t * p0 = src + (x0 & mask) + y * stride1 + (x0 & ~mask) * stride2;
+    const unsigned int slice_inc = ((stride2 - 1) * stride1) >> 2;  // RHS of a stripe to LHS of next in words
+
+    if (x0 == x1) {
+        // *******************
+        // Partial single word xfer
+        return;
+    }
+
+    for (unsigned int i = 0; i != h; ++i, dst += dst_stride, p0 += stride1)
+    {
+        unsigned int x = x0;
+        const uint32_t * p = (const uint32_t *)p0;
+        uint16_t * d = (uint16_t *)dst;
+
+        if (xskip0 != 0) {
+            const uint32_t p3 = *p++;
+
+            if (xskip0 == 1)
+                *d++ = ((p3 >> 10) & 0x3ff) << 6;
+            *d++ = ((p3 >> 20) & 0x3ff) << 6;
+
+            if (((x += 4) & mask) == 0)
+                p += slice_inc;
+        }
+
+        while (x != x1) {
+            const uint32_t p3 = *p++;
+            *d++ = (p3 & 0x3ff) << 6;
+            *d++ = ((p3 >> 10) & 0x3ff) << 6;
+            *d++ = ((p3 >> 20) & 0x3ff) << 6;
+
+            if (((x += 4) & mask) == 0)
+                p += slice_inc;
+        }
+
+        if (xrem1 != 0) {
+            const uint32_t p3 = *p;
+
+            *d++ = (p3 & 0x3ff) << 6;
+            if (xrem1 == 2)
+                *d++ = ((p3 >> 10) & 0x3ff) << 6;
+        }
+    }
+}
+
 static void sand_to_planar_nv12(struct request_data *driver_data,
 			   struct object_surface *surface_object,
 			   VAImage *image,
@@ -233,6 +295,17 @@ static void sand30_to_planar_p010(struct request_data *driver_data,
 			   struct object_buffer *buffer_object,
 			   const unsigned int i)
 {
+	const uint8_t *const s = surface_object->destination_data[i];
+	uint8_t *const d = (uint8_t *)buffer_object->data + image->offsets[i];
+
+	av_rpi_sand30_to_p010(d, image->pitches[i],
+				s, 128,
+				fourcc_mod_broadcom_param(
+					surface_object->destination_modifiers[0]),
+				0, 0,
+				image->width,
+				i == 0 ? image->height :
+					 image->height / 2);
 }
 
 static VAStatus copy_surface_to_image (struct request_data *driver_data,
@@ -317,8 +390,14 @@ VAStatus RequestDeriveImage(VADriverContextP context, VASurfaceID surface_id,
 VAStatus RequestQueryImageFormats(VADriverContextP context,
 				  VAImageFormat *formats, int *formats_count)
 {
-	formats[0].fourcc = VA_FOURCC_NV12;
-	*formats_count = 1;
+	VAImageFormat * f = formats;
+	(f++)->fourcc = VA_FOURCC_NV12;
+	(f++)->fourcc = VA_FOURCC_P010;
+	*formats_count = f - formats;
+
+#if V4L2_REQUEST_MAX_IMAGE_FORMATS < 2
+#error Image formats overflow
+#endif
 
 	return VA_STATUS_SUCCESS;
 }

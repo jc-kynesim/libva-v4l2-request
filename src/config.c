@@ -43,6 +43,16 @@
 
 #include "autoconfig.h"
 
+static unsigned int profile_to_rt_format(const VAProfile profile)
+{
+	switch (profile) {
+	case VAProfileHEVCMain10:
+		return VA_RT_FORMAT_YUV420_10;
+	default:
+		return VA_RT_FORMAT_YUV420;
+	}
+}
+
 VAStatus RequestCreateConfig(VADriverContextP context, VAProfile profile,
 			     VAEntrypoint entrypoint,
 			     VAConfigAttrib *attributes, int attributes_count,
@@ -82,7 +92,7 @@ VAStatus RequestCreateConfig(VADriverContextP context, VAProfile profile,
 	config_object->profile = profile;
 	config_object->entrypoint = entrypoint;
 	config_object->attributes[0].type = VAConfigAttribRTFormat;
-	config_object->attributes[0].value = VA_RT_FORMAT_YUV420;
+	config_object->attributes[0].value = profile_to_rt_format(profile);
 	config_object->attributes_count = 1;
 
 	for (i = 1; i < attributes_count; i++) {
@@ -219,7 +229,7 @@ VAStatus RequestGetConfigAttributes(VADriverContextP context, VAProfile profile,
 	for (i = 0; i < attributes_count; i++) {
 		switch (attributes[i].type) {
 		case VAConfigAttribRTFormat:
-			attributes[i].value = VA_RT_FORMAT_YUV420;
+			attributes[i].value = profile_to_rt_format(profile);
 			break;
 		default:
 			attributes[i].value = VA_ATTRIB_NOT_SUPPORTED;
