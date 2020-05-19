@@ -92,6 +92,7 @@ static VAStatus codec_store_buffer(struct request_data *driver_data,
 			break;
 
 		case VAProfileHEVCMain:
+		case VAProfileHEVCMain10:
 			memcpy(&surface_object->params.h265.picture,
 			       buffer_object->data,
 			       sizeof(surface_object->params.h265.picture));
@@ -115,6 +116,7 @@ static VAStatus codec_store_buffer(struct request_data *driver_data,
 			break;
 
 		case VAProfileHEVCMain:
+		case VAProfileHEVCMain10:
 			memcpy(&surface_object->params.h265.slice,
 			       buffer_object->data,
 			       sizeof(surface_object->params.h265.slice));
@@ -146,6 +148,7 @@ static VAStatus codec_store_buffer(struct request_data *driver_data,
 			break;
 
 		case VAProfileHEVCMain:
+		case VAProfileHEVCMain10:
 			memcpy(&surface_object->params.h265.iqmatrix,
 			       buffer_object->data,
 			       sizeof(surface_object->params.h265.iqmatrix));
@@ -190,6 +193,7 @@ static VAStatus codec_set_controls(struct request_data *driver_data,
 		break;
 
 	case VAProfileHEVCMain:
+	case VAProfileHEVCMain10:
 		rc = h265_set_controls(driver_data, context, surface_object);
 		if (rc < 0)
 			return VA_STATUS_ERROR_OPERATION_FAILED;
