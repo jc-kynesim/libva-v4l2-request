@@ -32,6 +32,7 @@
 #include "context.h"
 #include "object_heap.h"
 #include "video.h"
+#include "media.h"
 #include <va/va.h>
 
 #include <linux/videodev2.h>
@@ -55,6 +56,9 @@ struct request_data {
 	int media_fd;
 
 	struct video_format *video_format;
+
+	struct pollqueue * pollqueue;
+	struct media_pool * media_pool;;
 };
 
 VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP context);

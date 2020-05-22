@@ -170,6 +170,7 @@ static VAStatus codec_store_buffer(struct request_data *driver_data,
 static VAStatus codec_set_controls(struct request_data *driver_data,
 				   struct object_context *context,
 				   VAProfile profile,
+				   int req_fd,
 				   struct object_surface *surface_object)
 {
 	int rc;
@@ -194,7 +195,7 @@ static VAStatus codec_set_controls(struct request_data *driver_data,
 
 	case VAProfileHEVCMain:
 	case VAProfileHEVCMain10:
-		rc = h265_set_controls(driver_data, context, surface_object);
+		rc = h265_set_controls(driver_data, context, req_fd, surface_object);
 		if (rc < 0)
 			return VA_STATUS_ERROR_OPERATION_FAILED;
 		break;
@@ -216,6 +217,7 @@ static VAStatus flush_data(struct request_data *driver_data,
 	unsigned int output_type, capture_type;
 	int request_fd;
 	int rc;
+	struct media_request * mreq;
 
 	surface_object->needs_flush = false;
 
@@ -226,10 +228,16 @@ static VAStatus flush_data(struct request_data *driver_data,
 	output_type = v4l2_type_video_output(video_format->v4l2_mplane);
 	capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
 
-	request_fd = surface_object->request_fd;
+//	request_fd = surface_object->request_fd;
+	mreq = media_request_get(driver_data->media_pool);
+	if (!mreq) {
+		request_log("media_request_get failed\n");
+		return VA_STATUS_ERROR_ALLOCATION_FAILED;
+	}
+	request_fd = media_request_fd(mreq);
 
 	rc = codec_set_controls(driver_data, context_object,
-				config_object->profile, surface_object);
+				config_object->profile, request_fd, surface_object);
 	if (rc != VA_STATUS_SUCCESS)
 		return rc;
 
@@ -249,6 +257,11 @@ static VAStatus flush_data(struct request_data *driver_data,
 				       surface_object->destination_buffers_count, false);
 		if (rc < 0)
 			return VA_STATUS_ERROR_OPERATION_FAILED;
+	}
+
+	if (media_request_start(mreq)) {
+		request_log("media_request_start failed\n");
+		return VA_STATUS_ERROR_OPERATION_FAILED;
 	}
 
 	return queue_await_completion(driver_data, surface_object, is_last);

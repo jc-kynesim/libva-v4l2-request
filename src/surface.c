@@ -33,6 +33,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <poll.h>
 
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -321,7 +322,7 @@ VAStatus queue_await_completion(struct request_data *driver_data, struct object_
 
 	output_type = v4l2_type_video_output(video_format->v4l2_mplane);
 	capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
-
+#if 0
 	request_fd = surface_object->request_fd;
 	if (request_fd < 0) {
 		status = VA_STATUS_ERROR_OPERATION_FAILED;
@@ -345,7 +346,7 @@ VAStatus queue_await_completion(struct request_data *driver_data, struct object_
 		status = VA_STATUS_ERROR_OPERATION_FAILED;
 		goto error;
 	}
-
+#endif
 	rc = v4l2_dequeue_buffer(driver_data->video_fd, -1, output_type,
 				 surface_object->source_index, 1);
 	if (rc < 0) {
@@ -354,6 +355,19 @@ VAStatus queue_await_completion(struct request_data *driver_data, struct object_
 	}
 
 	if (last) {
+		{
+			struct pollfd p[2];
+			int n;
+			p[0].fd = -request_fd;
+			p[0].events = POLLIN | POLLPRI | POLLOUT;
+			p[0].revents = 0;
+			p[1].fd = driver_data->video_fd;
+			p[1].events = POLLIN | POLLPRI | POLLOUT;
+			p[1].revents = 0;
+			n = poll(p, 2, 100);
+			request_log("Last: [%d] %#x, %#x\n", n, p[0].revents, p[1].revents);
+		}
+
 		rc = v4l2_dequeue_buffer(driver_data->video_fd, -1, capture_type,
 					 surface_object->destination_index,
 					 surface_object->destination_buffers_count);

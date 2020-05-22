@@ -25,9 +25,39 @@
 #ifndef _MEDIA_H_
 #define _MEDIA_H_
 
+struct pollqueue;
+struct polltask;
+
+struct polltask *polltask_new(const int fd, const short events,
+			      void (*fn)(void *v, short revents), void * v);
+void polltask_delete(struct polltask * pt);
+
+void pollqueue_add_task(struct pollqueue *const pq, struct polltask *const pt);
+int pollqueue_poll(struct pollqueue *const pq, const int timeout);
+struct pollqueue * pollqueue_new(void);
+void pollqueue_delete(struct pollqueue * pq);
+
+struct media_request;
+struct media_pool;
+
+struct media_pool * media_pool_new(const char * const media_path,
+				   struct pollqueue * const pq,
+				   const unsigned int n);
+void media_pool_delete(struct media_pool * mp);
+
+struct media_request * media_request_get(struct media_pool * const mp);
+int media_request_fd(const struct media_request * const req);
+int media_request_start(struct media_request * const req);
+
+
+
+
+
 int media_request_alloc(int media_fd);
 int media_request_reinit(int request_fd);
 int media_request_queue(int request_fd);
 int media_request_wait_completion(int request_fd);
+
+
 
 #endif

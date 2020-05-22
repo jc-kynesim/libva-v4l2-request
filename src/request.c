@@ -180,6 +180,17 @@ VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP context)
 	driver_data->video_fd = video_fd;
 	driver_data->media_fd = media_fd;
 
+	driver_data->pollqueue = pollqueue_new();
+	if (!driver_data->pollqueue) {
+		request_log("Failed to create pollqueue\n");
+		return VA_STATUS_ERROR_OPERATION_FAILED;
+	}
+	driver_data->media_pool = media_pool_new(media_path, driver_data->pollqueue, 4);
+	if (!driver_data->media_pool) {
+		request_log("Failed to create media pool for '%s'\n", media_path);
+		return VA_STATUS_ERROR_OPERATION_FAILED;
+	}
+
 	status = VA_STATUS_SUCCESS;
 	goto complete;
 
