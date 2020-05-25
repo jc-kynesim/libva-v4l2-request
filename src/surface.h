@@ -85,7 +85,6 @@ struct object_surface {
 		} h265;
 	} params;
 
-	int request_fd;
 	bool req_one;
 	bool needs_flush;
 };

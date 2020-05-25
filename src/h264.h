@@ -35,6 +35,7 @@
 struct object_context;
 struct object_surface;
 struct request_data;
+struct media_request;
 
 #define H264_DPB_SIZE 16
 
@@ -53,6 +54,7 @@ struct h264_dpb {
 
 int h264_set_controls(struct request_data *data,
 		      struct object_context *context,
+		      struct media_request * const mreq,
 		      struct object_surface *surface);
 
 #endif

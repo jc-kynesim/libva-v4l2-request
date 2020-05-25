@@ -50,14 +50,4 @@ int media_request_fd(const struct media_request * const req);
 int media_request_start(struct media_request * const req);
 
 
-
-
-
-int media_request_alloc(int media_fd);
-int media_request_reinit(int request_fd);
-int media_request_queue(int request_fd);
-int media_request_wait_completion(int request_fd);
-
-
-
 #endif

@@ -31,6 +31,7 @@
 
 #include "utils.h"
 #include "v4l2.h"
+#include "media.h"
 
 static bool v4l2_type_is_output(unsigned int type)
 {
@@ -431,7 +432,9 @@ int v4l2_export_buffer(int video_fd, unsigned int type, unsigned int index,
 	return 0;
 }
 
-int v4l2_set_control(int video_fd, int request_fd, unsigned int id, void *data,
+int v4l2_set_control(int video_fd,
+		     struct media_request * const mreq,
+		     unsigned int id, void *data,
 		     unsigned int size)
 {
 	struct v4l2_ext_control control;
@@ -448,9 +451,9 @@ int v4l2_set_control(int video_fd, int request_fd, unsigned int id, void *data,
 	controls.controls = &control;
 	controls.count = 1;
 
-	if (request_fd >= 0) {
+	if (mreq) {
 		controls.which = V4L2_CTRL_WHICH_REQUEST_VAL;
-		controls.request_fd = request_fd;
+		controls.request_fd = media_request_fd(mreq);
 	}
 
 	rc = ioctl(video_fd, VIDIOC_S_EXT_CTRLS, &controls);

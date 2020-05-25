@@ -29,9 +29,11 @@
 struct object_context;
 struct object_surface;
 struct request_data;
+struct media_request;
 
 int mpeg2_set_controls(struct request_data *driver_data,
 		       struct object_context *context,
+		       struct media_request * const mreq,
 		       struct object_surface *surface_object);
 
 #endif

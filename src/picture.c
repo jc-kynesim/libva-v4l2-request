@@ -170,7 +170,7 @@ static VAStatus codec_store_buffer(struct request_data *driver_data,
 static VAStatus codec_set_controls(struct request_data *driver_data,
 				   struct object_context *context,
 				   VAProfile profile,
-				   int req_fd,
+				   struct media_request * const mreq,
 				   struct object_surface *surface_object)
 {
 	int rc;
@@ -178,7 +178,7 @@ static VAStatus codec_set_controls(struct request_data *driver_data,
 	switch (profile) {
 	case VAProfileMPEG2Simple:
 	case VAProfileMPEG2Main:
-		rc = mpeg2_set_controls(driver_data, context, surface_object);
+		rc = mpeg2_set_controls(driver_data, context, mreq, surface_object);
 		if (rc < 0)
 			return VA_STATUS_ERROR_OPERATION_FAILED;
 		break;
@@ -188,14 +188,14 @@ static VAStatus codec_set_controls(struct request_data *driver_data,
 	case VAProfileH264ConstrainedBaseline:
 	case VAProfileH264MultiviewHigh:
 	case VAProfileH264StereoHigh:
-		rc = h264_set_controls(driver_data, context, surface_object);
+		rc = h264_set_controls(driver_data, context, mreq, surface_object);
 		if (rc < 0)
 			return VA_STATUS_ERROR_OPERATION_FAILED;
 		break;
 
 	case VAProfileHEVCMain:
 	case VAProfileHEVCMain10:
-		rc = h265_set_controls(driver_data, context, req_fd, surface_object);
+		rc = h265_set_controls(driver_data, context, mreq, surface_object);
 		if (rc < 0)
 			return VA_STATUS_ERROR_OPERATION_FAILED;
 		break;
@@ -237,7 +237,7 @@ static VAStatus flush_data(struct request_data *driver_data,
 	request_fd = media_request_fd(mreq);
 
 	rc = codec_set_controls(driver_data, context_object,
-				config_object->profile, request_fd, surface_object);
+				config_object->profile, mreq, surface_object);
 	if (rc != VA_STATUS_SUCCESS)
 		return rc;
 
@@ -273,7 +273,6 @@ VAStatus RequestBeginPicture(VADriverContextP context, VAContextID context_id,
 	struct request_data *driver_data = context->pDriverData;
 	struct object_context *context_object;
 	struct object_surface *surface_object;
-	int request_fd = -1;
 
 	context_object = CONTEXT(driver_data, context_id);
 	if (context_object == NULL)
@@ -291,14 +290,6 @@ VAStatus RequestBeginPicture(VADriverContextP context, VAContextID context_id,
 
 	gettimeofday(&surface_object->timestamp, NULL);
 
-	request_fd = surface_object->request_fd;
-	if (request_fd < 0) {
-		request_fd = media_request_alloc(driver_data->media_fd);
-		if (request_fd < 0)
-			return VA_STATUS_ERROR_OPERATION_FAILED;
-
-		surface_object->request_fd = request_fd;
-	}
 	surface_object->req_one = true;
 	surface_object->needs_flush = false;
 

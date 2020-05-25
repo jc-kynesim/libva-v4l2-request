@@ -33,7 +33,7 @@ struct request_data;
 
 int h265_set_controls(struct request_data *driver_data,
 		      struct object_context *context_object,
-		      int req_fd,
+		      struct media_request * const mreq,
 		      struct object_surface *surface_object);
 
 #endif

@@ -263,8 +263,6 @@ VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 		surface_object->slices_count = 0;
 		surface_object->slices_size = 0;
 
-		surface_object->request_fd = -1;
-
 		surfaces_ids[i] = id;
 	}
 
@@ -302,9 +300,6 @@ VAStatus RequestDestroySurfaces(VADriverContextP context,
 				munmap(surface_object->destination_map[j],
 				       surface_object->destination_map_lengths[j]);
 
-		if (surface_object->request_fd > 0)
-			close(surface_object->request_fd);
-
 		object_heap_free(&driver_data->surface_heap,
 				 (struct object_base *)surface_object);
 	}
@@ -317,57 +312,17 @@ VAStatus queue_await_completion(struct request_data *driver_data, struct object_
 	VAStatus status;
 	struct video_format *video_format = driver_data->video_format;
 	unsigned int output_type, capture_type;
-	int request_fd = -1;
 	int rc;
 
 	output_type = v4l2_type_video_output(video_format->v4l2_mplane);
 	capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
-#if 0
-	request_fd = surface_object->request_fd;
-	if (request_fd < 0) {
-		status = VA_STATUS_ERROR_OPERATION_FAILED;
-		goto error;
-	}
 
-	rc = media_request_queue(request_fd);
-	if (rc < 0) {
-		status = VA_STATUS_ERROR_OPERATION_FAILED;
-		goto error;
-	}
-
-	rc = media_request_wait_completion(request_fd);
-	if (rc < 0) {
-		status = VA_STATUS_ERROR_OPERATION_FAILED;
-		goto error;
-	}
-
-	rc = media_request_reinit(request_fd);
-	if (rc < 0) {
-		status = VA_STATUS_ERROR_OPERATION_FAILED;
-		goto error;
-	}
-#endif
 	rc = v4l2_dequeue_buffer(driver_data->video_fd, -1, output_type,
 				 surface_object->source_index, 1);
-	if (rc < 0) {
-		status = VA_STATUS_ERROR_OPERATION_FAILED;
-		goto error;
-	}
+	if (rc < 0)
+		return VA_STATUS_ERROR_OPERATION_FAILED;
 
 	if (last) {
-		{
-			struct pollfd p[2];
-			int n;
-			p[0].fd = -request_fd;
-			p[0].events = POLLIN | POLLPRI | POLLOUT;
-			p[0].revents = 0;
-			p[1].fd = driver_data->video_fd;
-			p[1].events = POLLIN | POLLPRI | POLLOUT;
-			p[1].revents = 0;
-			n = poll(p, 2, 100);
-			request_log("Last: [%d] %#x, %#x\n", n, p[0].revents, p[1].revents);
-		}
-
 		rc = v4l2_dequeue_buffer(driver_data->video_fd, -1, capture_type,
 					 surface_object->destination_index,
 					 surface_object->destination_buffers_count);
@@ -380,15 +335,7 @@ VAStatus queue_await_completion(struct request_data *driver_data, struct object_
 	}
 
 	status = VA_STATUS_SUCCESS;
-	goto complete;
-
 error:
-	if (request_fd >= 0) {
-		close(request_fd);
-		surface_object->request_fd = -1;
-	}
-
-complete:
 	return status;
 }
 

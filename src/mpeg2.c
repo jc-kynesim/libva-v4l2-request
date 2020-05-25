@@ -41,6 +41,7 @@
 
 int mpeg2_set_controls(struct request_data *driver_data,
 		       struct object_context *context_object,
+		       struct media_request * const mreq,
 		       struct object_surface *surface_object)
 {
 	VAPictureParameterBufferMPEG2 *picture =
@@ -117,7 +118,7 @@ int mpeg2_set_controls(struct request_data *driver_data,
 	timestamp = v4l2_timeval_to_ns(&backward_reference_surface->timestamp);
 	slice_params.backward_ref_ts = timestamp;
 
-	rc = v4l2_set_control(driver_data->video_fd, surface_object->request_fd,
+	rc = v4l2_set_control(driver_data->video_fd, mreq,
 			      V4L2_CID_MPEG_VIDEO_MPEG2_SLICE_PARAMS,
 			      &slice_params, sizeof(slice_params));
 	if (rc < 0)
@@ -144,8 +145,7 @@ int mpeg2_set_controls(struct request_data *driver_data,
 				iqmatrix->chroma_non_intra_quantiser_matrix[i];
 		}
 
-		rc = v4l2_set_control(driver_data->video_fd,
-				      surface_object->request_fd,
+		rc = v4l2_set_control(driver_data->video_fd, mreq,
 				      V4L2_CID_MPEG_VIDEO_MPEG2_QUANTIZATION,
 				      &quantization, sizeof(quantization));
 	}
