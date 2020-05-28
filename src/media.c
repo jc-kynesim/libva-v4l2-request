@@ -153,8 +153,6 @@ int pollqueue_poll(struct pollqueue *const pq, int timeout)
 			}
 
 			for (pt = pq->head, i = 0; pt; pt = pt->next, ++i) {
-				request_log("Add fd %d events=%#x\n", pt->fd, pt->events);
-
 				pq->a[i] = (struct pollfd){
 					.fd = pt->fd,
 					.events = pt->events
@@ -163,19 +161,16 @@ int pollqueue_poll(struct pollqueue *const pq, int timeout)
 			pq->modified = false;
 		}
 
-		request_log("Try poll\n");
 		while ((rv = poll(pq->a, pq->n, timeout)) == -1) {
 			if (errno != EINTR)
 				return -errno;
 		}
-		request_log("rv = %d\n", rv);
 
 		/* Safe chain follow - adds are safe too as they add to tail */
 		pt = pq->head;
 		for (i = 0, evt = 0; evt < rv; ++i) {
 			struct polltask *const pt_next = pt->next;
 
-			request_log("[%d]revents = %#x\n", i, pq->a[i].revents);
 			if (pq->a[i].revents) {
 				++evt;
 				pollqueue_rem_task(pq, pt);
@@ -269,8 +264,13 @@ int media_request_start(struct media_request * const req)
 	struct media_pool * const mp = req->mp;
 
 	while (ioctl(req->fd, MEDIA_REQUEST_IOC_QUEUE, NULL) == -1)
-		if (errno != EINTR)
-			return -errno;
+	{
+		const int err = errno;
+		if (err == EINTR)
+			continue;
+		request_log("%s: Failed to Q media: (%d) %s\n", __func__, err, strerror(err));
+		return -err;
+	}
 
 	pollqueue_add_task(mp->pq, req->pt);
 	return 0;

@@ -37,6 +37,8 @@
 
 #include <linux/videodev2.h>
 
+struct dmabufs_ctrl;
+
 #define V4L2_REQUEST_STR_VENDOR			"v4l2-request"
 
 #define V4L2_REQUEST_MAX_PROFILES		11
@@ -57,7 +59,8 @@ struct request_data {
 	struct video_format *video_format;
 
 	struct pollqueue * pollqueue;
-	struct media_pool * media_pool;;
+	struct media_pool * media_pool;
+	struct dmabufs_ctrl * dmabufs_ctrl;
 };
 
 VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP context);

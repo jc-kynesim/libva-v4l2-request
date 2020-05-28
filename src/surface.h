@@ -33,6 +33,8 @@
 
 #include "object_heap.h"
 
+struct dmabuf_h;
+
 #define SURFACE(data, id)                                                      \
 	((struct object_surface *)object_heap_lookup(&(data)->surface_heap, id))
 #define SURFACE_ID_OFFSET		0x04000000
@@ -47,6 +49,7 @@ struct object_surface {
 	unsigned int source_index;
 	void *source_data;
 	unsigned int source_size;
+	struct dmabuf_h * source_dh;
 
 	unsigned int destination_index;
 	void *destination_map[VIDEO_MAX_PLANES];
@@ -59,6 +62,7 @@ struct object_surface {
 	uint64_t destination_modifiers[VIDEO_MAX_PLANES];
 	unsigned int destination_planes_count;
 	unsigned int destination_buffers_count;
+	struct dmabuf_h * destination_dh[VIDEO_MAX_PLANES];
 
 	unsigned int slices_size;
 	unsigned int slices_count;

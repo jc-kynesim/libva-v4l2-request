@@ -44,6 +44,7 @@
 
 #include <linux/videodev2.h>
 
+#include "dmabufs.h"
 #include "media.h"
 #include "utils.h"
 #include "v4l2.h"
@@ -63,10 +64,12 @@ static VAStatus codec_store_buffer(struct request_data *driver_data,
 		 * RenderPicture), we can't use a V4L2 buffer directly
 		 * and have to copy from a regular buffer.
 		 */
+		dmabuf_write_start(surface_object->source_dh);
 		memcpy(surface_object->source_data +
 			       surface_object->slices_size,
 		       buffer_object->data,
 		       buffer_object->size * buffer_object->count);
+		dmabuf_write_end(surface_object->source_dh);
 		surface_object->slices_size +=
 			buffer_object->size * buffer_object->count;
 		surface_object->slices_count++;
@@ -215,7 +218,6 @@ static VAStatus flush_data(struct request_data *driver_data,
 {
 	struct video_format *video_format;
 	unsigned int output_type, capture_type;
-	int request_fd;
 	int rc;
 	struct media_request * mreq;
 
@@ -228,20 +230,20 @@ static VAStatus flush_data(struct request_data *driver_data,
 	output_type = v4l2_type_video_output(video_format->v4l2_mplane);
 	capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
 
-//	request_fd = surface_object->request_fd;
 	mreq = media_request_get(driver_data->media_pool);
 	if (!mreq) {
 		request_log("media_request_get failed\n");
 		return VA_STATUS_ERROR_ALLOCATION_FAILED;
 	}
-	request_fd = media_request_fd(mreq);
 
 	rc = codec_set_controls(driver_data, context_object,
 				config_object->profile, mreq, surface_object);
 	if (rc != VA_STATUS_SUCCESS)
 		return rc;
 
-	rc = v4l2_queue_buffer(driver_data->video_fd, request_fd, output_type,
+	rc = v4l2_queue_dmabuf(driver_data->video_fd, mreq,
+			       surface_object->source_dh,
+			       output_type,
 			       &surface_object->timestamp,
 			       surface_object->source_index,
 			       surface_object->slices_size, 1, !is_last);
@@ -251,10 +253,17 @@ static VAStatus flush_data(struct request_data *driver_data,
 
 	if (surface_object->req_one) {
 		surface_object->req_one = false;
-
-		rc = v4l2_queue_buffer(driver_data->video_fd, -1, capture_type, NULL,
+#if 0
+		rc = v4l2_queue_buffer(driver_data->video_fd, NULL, capture_type, NULL,
 				       surface_object->destination_index, 0,
 				       surface_object->destination_buffers_count, false);
+#else
+		rc = v4l2_queue_dmabuf(driver_data->video_fd, NULL,
+				       surface_object->destination_dh[0],
+				       capture_type, NULL,
+				       surface_object->destination_index, 0,
+				       surface_object->destination_buffers_count, false);
+#endif
 		if (rc < 0)
 			return VA_STATUS_ERROR_OPERATION_FAILED;
 	}

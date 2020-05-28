@@ -29,6 +29,7 @@
 
 #include <linux/videodev2.h>
 
+#include "dmabufs.h"
 #include "utils.h"
 #include "v4l2.h"
 #include "media.h"
@@ -237,6 +238,7 @@ int v4l2_get_format(int video_fd, unsigned int type, unsigned int *width,
 }
 
 int v4l2_create_buffers(int video_fd, unsigned int type,
+			enum v4l2_memory memory,
 			unsigned int buffers_count, unsigned int *index_base)
 {
 	struct v4l2_create_buffers buffers;
@@ -244,7 +246,7 @@ int v4l2_create_buffers(int video_fd, unsigned int type,
 
 	memset(&buffers, 0, sizeof(buffers));
 	buffers.format.type = type;
-	buffers.memory = V4L2_MEMORY_MMAP;
+	buffers.memory = memory;
 	buffers.count = buffers_count;
 
 	rc = ioctl(video_fd, VIDIOC_G_FMT, &buffers.format);
@@ -330,7 +332,8 @@ int v4l2_request_buffers(int video_fd, unsigned int type,
 	return 0;
 }
 
-int v4l2_queue_buffer(int video_fd, int request_fd, unsigned int type,
+int v4l2_queue_buffer(int video_fd,
+		      struct media_request *const mreq, unsigned int type,
 		      struct timeval *timestamp, unsigned int index,
 		      unsigned int size, unsigned int buffers_count,
 		      bool hold_flag)
@@ -355,9 +358,9 @@ int v4l2_queue_buffer(int video_fd, int request_fd, unsigned int type,
 		else
 			buffer.bytesused = size;
 
-	if (request_fd >= 0) {
+	if (mreq) {
 		buffer.flags = V4L2_BUF_FLAG_REQUEST_FD;
-		buffer.request_fd = request_fd;
+		buffer.request_fd = media_request_fd(mreq);
 		if (hold_flag)
 			buffer.flags |= V4L2_BUF_FLAG_M2M_HOLD_CAPTURE_BUF;
 	}
@@ -373,6 +376,50 @@ int v4l2_queue_buffer(int video_fd, int request_fd, unsigned int type,
 
 	return 0;
 }
+
+int v4l2_queue_dmabuf(int video_fd,
+		      struct media_request *const mreq,
+		      struct dmabuf_h *const dh,
+		      unsigned int type,
+		      struct timeval *timestamp, unsigned int index,
+		      unsigned int size, unsigned int buffers_count,
+		      bool hold_flag)
+{
+	struct v4l2_plane planes[buffers_count];
+	struct v4l2_buffer buffer;
+	unsigned int i;
+	int rc;
+
+	memset(planes, 0, sizeof(planes));
+	memset(&buffer, 0, sizeof(buffer));
+
+	buffer.type = type;
+	buffer.memory = V4L2_MEMORY_DMABUF;
+	buffer.index = index;
+	buffer.length = dmabuf_size(dh);
+	buffer.m.fd = dmabuf_fd(dh);
+
+	buffer.bytesused = size;
+
+	if (mreq) {
+		buffer.flags = V4L2_BUF_FLAG_REQUEST_FD;
+		buffer.request_fd = media_request_fd(mreq);
+		if (hold_flag)
+			buffer.flags |= V4L2_BUF_FLAG_M2M_HOLD_CAPTURE_BUF;
+	}
+
+	if (timestamp != NULL)
+		buffer.timestamp = *timestamp;
+
+	rc = ioctl(video_fd, VIDIOC_QBUF, &buffer);
+	if (rc < 0) {
+		request_log("Unable to queue buffer: %s\n", strerror(errno));
+		return -1;
+	}
+
+	return 0;
+}
+
 
 int v4l2_dequeue_buffer(int video_fd, int request_fd, unsigned int type,
 			unsigned int index, unsigned int buffers_count)

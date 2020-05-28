@@ -47,7 +47,7 @@
 #include "utils.h"
 #include "v4l2.h"
 #include "video.h"
-
+#include "dmabufs.h"
 
 
 static const struct try_formats {
@@ -86,8 +86,6 @@ VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 
 //	if (format != VA_RT_FORMAT_YUV420)
 //		return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
-
-	request_log("%s: rt_format=%#x\n", __func__, format);
 
         if (!driver_data->video_format) {
 		found = false;
@@ -134,6 +132,7 @@ VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 	destination_planes_count = video_format->planes_count;
 
 	rc = v4l2_create_buffers(driver_data->video_fd, capture_type,
+				 V4L2_MEMORY_DMABUF,
 				 surfaces_count, &index_base);
 	if (rc < 0)
 		return VA_STATUS_ERROR_ALLOCATION_FAILED;
@@ -155,13 +154,21 @@ VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 			return VA_STATUS_ERROR_ALLOCATION_FAILED;
 
 		for (j = 0; j < video_format->v4l2_buffers_count; j++) {
+			surface_object->destination_dh[j] = dmabuf_alloc(driver_data->dmabufs_ctrl, destination_sizes[j]);
+			if (!surface_object->destination_dh[j]) {
+				request_log("Failed dest surface alloc\n");
+				return VA_STATUS_ERROR_ALLOCATION_FAILED;
+			}
+
 			surface_object->destination_map[j] =
+				dmabuf_map(surface_object->destination_dh[j]);
+#if 0
 				mmap(NULL,
 				     surface_object->destination_map_lengths[j],
 				     PROT_READ | PROT_WRITE, MAP_SHARED,
 				     driver_data->video_fd,
 				     surface_object->destination_map_offsets[j]);
-
+#endif
 			if (surface_object->destination_map[j] == MAP_FAILED)
 				return VA_STATUS_ERROR_ALLOCATION_FAILED;
 		}

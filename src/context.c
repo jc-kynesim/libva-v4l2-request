@@ -43,6 +43,7 @@
 #include <h264-ctrls.h>
 #include <hevc-ctrls.h>
 
+#include "dmabufs.h"
 #include "utils.h"
 #include "v4l2.h"
 
@@ -125,6 +126,7 @@ VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 	}
 
 	rc = v4l2_create_buffers(driver_data->video_fd, output_type,
+				 V4L2_MEMORY_DMABUF,
 				 surfaces_count, &index_base);
 	if (rc < 0) {
 		status = VA_STATUS_ERROR_ALLOCATION_FAILED;
@@ -153,6 +155,11 @@ VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 			goto error;
 		}
 
+#if 1
+		length = 0x100000;
+		surface_object->source_dh = dmabuf_alloc(driver_data->dmabufs_ctrl, length);
+		source_data = dmabuf_map(surface_object->source_dh);
+#else
 		rc = v4l2_query_buffer(driver_data->video_fd, output_type,
 				       index, &length, &offset, 1);
 		if (rc < 0) {
@@ -166,6 +173,7 @@ VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 			status = VA_STATUS_ERROR_ALLOCATION_FAILED;
 			goto error;
 		}
+#endif
 
 		surface_object->source_index = index;
 		surface_object->source_data = source_data;

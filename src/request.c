@@ -36,6 +36,7 @@
 
 #include <va/va_backend.h>
 
+#include "dmabufs.h"
 #include "request.h"
 #include "utils.h"
 #include "v4l2.h"
@@ -65,7 +66,6 @@ VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP context)
 	unsigned int capabilities;
 	unsigned int capabilities_required;
 	int video_fd = -1;
-	int media_fd = -1;
 	char *video_path;
 	char *media_path;
 	int rc;
@@ -186,6 +186,12 @@ VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP context)
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 	}
 
+	driver_data->dmabufs_ctrl = dmabufs_ctrl_new();
+	if (!driver_data->dmabufs_ctrl) {
+		request_log("Failed to get dmabufs\n");
+		return VA_STATUS_ERROR_OPERATION_FAILED;
+	}
+
 	status = VA_STATUS_SUCCESS;
 	goto complete;
 
@@ -194,9 +200,6 @@ error:
 
 	if (video_fd >= 0)
 		close(video_fd);
-
-	if (media_fd >= 0)
-		close(media_fd);
 
 complete:
 	return status;
@@ -269,6 +272,9 @@ VAStatus RequestTerminate(VADriverContextP context)
 	}
 
 	object_heap_destroy(&driver_data->config_heap);
+
+	media_pool_delete(driver_data->media_pool);
+	dmabufs_ctrl_delete(driver_data->dmabufs_ctrl);
 
 	free(context->pDriverData);
 	context->pDriverData = NULL;

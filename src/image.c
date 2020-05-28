@@ -33,6 +33,7 @@
 #include <assert.h>
 #include <string.h>
 
+#include "dmabufs.h"
 #include "tiled_yuv.h"
 #include "utils.h"
 #include "v4l2.h"
@@ -314,10 +315,14 @@ static VAStatus copy_surface_to_image (struct request_data *driver_data,
 {
 	struct object_buffer *buffer_object;
 	unsigned int i;
+	VAStatus status = VA_STATUS_SUCCESS;
 
 	buffer_object = BUFFER(driver_data, image->buf);
 	if (buffer_object == NULL)
 		return VA_STATUS_ERROR_INVALID_BUFFER;
+
+	/* **** Loop over all */
+	dmabuf_read_start(surface_object->destination_dh[0]);
 
 	for (i = 0; i < surface_object->destination_planes_count; i++) {
 		switch (driver_data->video_format->v4l2_format) {
@@ -342,11 +347,14 @@ static VAStatus copy_surface_to_image (struct request_data *driver_data,
 			       surface_object->destination_sizes[i]);
 			break;
 		default:
-			return VA_STATUS_ERROR_UNIMPLEMENTED;
+			status = VA_STATUS_ERROR_UNIMPLEMENTED;
+			break;
 		}
 	}
 
-	return VA_STATUS_SUCCESS;
+	dmabuf_read_end(surface_object->destination_dh[0]);
+
+	return status;
 }
 
 VAStatus RequestDeriveImage(VADriverContextP context, VASurfaceID surface_id,

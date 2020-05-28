@@ -30,6 +30,7 @@
 #define SOURCE_SIZE_MAX						(1024 * 1024)
 
 struct media_request;
+struct dmabuf_h;
 
 unsigned int v4l2_type_video_output(bool mplane);
 unsigned int v4l2_type_video_capture(bool mplane);
@@ -42,13 +43,21 @@ int v4l2_get_format(int video_fd, unsigned int type, unsigned int *width,
 		    unsigned int *height, unsigned int *bytesperline,
 		    unsigned int *sizes, unsigned int *planes_count);
 int v4l2_create_buffers(int video_fd, unsigned int type,
+			enum v4l2_memory memory,
 			unsigned int buffers_count, unsigned int *index_base);
 int v4l2_query_buffer(int video_fd, unsigned int type, unsigned int index,
 		      unsigned int *lengths, unsigned int *offsets,
 		      unsigned int buffers_count);
 int v4l2_request_buffers(int video_fd, unsigned int type,
 			 unsigned int buffers_count);
-int v4l2_queue_buffer(int video_fd, int request_fd, unsigned int type,
+int v4l2_queue_buffer(int video_fd, struct media_request *const mreq,
+		      unsigned int type,
+		      struct timeval *timestamp, unsigned int index,
+		      unsigned int size, unsigned int buffers_count,
+		      bool hold_flag);
+int v4l2_queue_dmabuf(int video_fd, struct media_request *const mreq,
+		      struct dmabuf_h *const dh,
+		      unsigned int type,
 		      struct timeval *timestamp, unsigned int index,
 		      unsigned int size, unsigned int buffers_count,
 		      bool hold_flag);
