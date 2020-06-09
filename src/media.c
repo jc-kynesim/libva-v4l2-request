@@ -121,6 +121,30 @@ void pollqueue_add_task(struct pollqueue *const pq, struct polltask *const pt)
 	pq->modified = true;
 }
 
+#define POLLQUEUE_TIMEOUT_SECS(x) (pollqueue_now() + ((uint64_t)(x) * 1000))
+
+#define POLLQUEUE_WAIT(rv, pq, cond) do {\
+	uint64_t time = 0;\
+	rv = pollqueue_poll((pq), 0);\
+	if (rv >= 0) {\
+		while (!(cond)) {\
+			if (!ttime)\
+				ttime = POLLQUEUE_TIMEOUT_SECS(2);\
+			rv = pollqueue_poll((pq), ttime);\
+			if (rv <= 0)\
+				break;\
+		}\
+	}\
+while(0)
+
+uint64_t pollqueue_now()
+{
+	struct timespec now;
+	if (get_clocktime(CLOCK_MONOTONIC, &now))
+		return 0;
+	return (now.tv_nsec / 1000000) + (uint64_t)now.tv_sec * 1000;
+}
+
 /*
  * -ve error
  * 0   timedout or nothing to do
@@ -128,18 +152,21 @@ void pollqueue_add_task(struct pollqueue *const pq, struct polltask *const pt)
  *
  * *** All of this lot is single-thread only
 */
-int pollqueue_poll(struct pollqueue *const pq, int timeout)
+int pollqueue_poll(struct pollqueue *const pq, uint64_t timeout_time)
 {
 	int t = 0;
 	int rv;
 
-	if (!pq->n)
+	if (pq->n)
 		return 0;
 
 	do {
 		unsigned int i;
 		struct polltask *pt;
 		int evt;
+		uint64_t now = timeout_time ? pollqueue_now() : 0;
+
+		timeout = (int64_t)(timeout_time - now) <= 0 ? 0 : (int)(timeout_time - now);
 
 		if (pq->modified) {
 			if (pq->asize < pq->n) {
@@ -241,17 +268,11 @@ static void mq_put_free(struct media_pool *const mp, struct media_request *const
 struct media_request * media_request_get(struct media_pool * const mp)
 {
 	struct media_request *req;
+	int rv;
 
-	/* Process anything pending */
-	pollqueue_poll(mp->pq, 0);
+	POLLQUEUE_WAIT(rv, mp->pq, (req = mq_get_free(mp)) != NULL);
 
-	while (!(req = mq_get_free(mp))) {
-		/* Wait for stuff to happen */
-		if (pollqueue_poll(mp->pq, 2000) <= 0)
-			return NULL;
-	}
-
-	return req;
+	return rv <= 0 ? NULL : req;
 }
 
 int media_request_fd(const struct media_request * const req)
@@ -354,5 +375,691 @@ void media_pool_delete(struct media_pool * mp)
 	close(mp->fd);
 	free(mp);
 }
+
+
+#define INDEX_UNSET (~(uint32_t)0);
+
+enum qent_status {
+	QENT_NEW,
+	QENT_PENDING,
+	QENT_WAITING,
+	QENT_DONE,
+	QENT_ERROR
+};
+
+struct mediabuf_qent {
+	struct mediabuf_qent *next;
+	enum qent_status status;
+	uint32_t index;
+	struct dmabuf_h *dh[VIDEO_MAX_PLANES];
+	struct timeval timestamp;
+};
+
+struct buf_pool {
+	enum v4l2_buf_type;
+	struct mediabuf_qent *free_head;
+	struct mediabuf_qent *free_tail;
+	struct mediabuf_qent *inuse_head;
+	struct mediabuf_qent *inuse_tail;
+};
+
+void dmabuf_qent_delete(struct mediabuf_qent *const be)
+{
+	unsigned int i;
+	if (!be)
+		return;
+	for (i = 0; i != VIDEO_MAX_PLANES; ++i)
+		dmabuf_free(be->dh[i]);
+	free(be);
+}
+
+struct mediabuf_qent *dmabuf_qent_new()
+{
+	struct mediabuf_qent * be = malloc(*be);
+	*be = (struct mediabuf_qent) {
+		.status = QENT_NEW,
+		.index  = INDEX_UNSET
+	};
+	return be;
+}
+
+static void bq_put_free(struct buf_pool *const bp, struct mediabuf_qent * be)
+{
+	if (bp->free_tail)
+		bp->free_tail->next = be;
+	else
+		bp->free_head = be;
+	be->prev = bp->free_tail;
+	be->next = NULL;
+	bp->free_tail = be;
+}
+
+static struct mediabuf_qent * bq_get_free(struct buf_pool *const bp)
+{
+	struct mediabuf_qent *const be = bp->free_head;
+	if (!be)
+		return NULL;
+
+	if (be->next)
+		be->next->prev = be->prev;
+	else
+		be->inuse_tail = be->prev;
+	bp->free_head = be->next;
+	bp->next = NULL;
+	bp->prev = NULL;
+
+}
+
+static struct mediabuf_qent * bq_extract_inuse(struct buf_pool *const bp, struct mediabuf_qent *const be)
+{
+	if (be->next)
+		be->next->prev = be->prev;
+	else
+		be->inuse_tail = be->prev;
+	if (be->prev)
+		be->prev->next = be->next;
+	else
+		bp->free_head = be->next;
+	bp->next = NULL;
+	bp->prev = NULL;
+
+	return be;
+}
+
+static void bq_free_all_free(struct buf_pool *const bp)
+{
+	struct mediabuf_qent *be;
+	while ((be = bq_get_free(bp)) != NULL)
+		dmabuf_qent_delete(be);
+}
+
+void dmabuf_qent_put_free(struct buf_pool *const bp, struct mediabuf_qent *be)
+{
+	unsigned int i;
+	/* Clear out state vars */
+	be->timestamp.tv_sec = 0;
+	be->timestamp.tv_usec = 0;
+	for (i = 0; i < VIDEO_MAX_PLANES && be->dh[i]; ++i)
+		dmabuf_len_set(be->dh[i], 0);
+
+	bq_put_free(bp, be);
+}
+
+void dmabuf_qent_put_inuse(struct buf_pool *const bp, struct mediabuf_qent *be)
+{
+	if (bp->inuse_tail)
+		bp->inuse_tail->next = be;
+	else
+		bp->inuse_head = be;
+	be->prev = bp->inuse_tail;
+	be->next = NULL;
+	bp->inuse_tail = be;
+}
+
+static struct mediabuf_qent *queue_get_free(struct buf_pool *const bp, struct pollqueue *const pq)
+{
+	struct mediabuf_qent *buf;
+	int rv;
+
+	POLLQUEUE_WAIT(rv, pq, (buf = bq_get_free(bp)) != NULL);
+
+	return rv <= 0 ? NULL : buf;
+}
+
+struct mediabuf_qent * dmabuf_queue_extract_fd(struct buf_pool *const bp, const int fd)
+{
+	struct mediabuf_qent *be;
+
+	/* Expect 1st in Q, but allow anywhere */
+	for (be = bp->inuse_head; be; be = be->next) {
+		if (dmabuf_fd(be->dh[0]) == fd)
+			return bq_extract_inuse(bp, be);
+	}
+	return NULL;
+}
+
+
+void dmabuf_queue_delete(struct buf_pool *const bp)
+{
+	if (!bp)
+		return;
+	free(bp);
+}
+
+struct buf_pool* dmabuf_queue_new(const int vfd, struct pollqueue * pq,
+				  enum v4l2_buf_type buftype)
+{
+	struct buf_pool *bp = malloc(sizeof(*bp));
+	if (!bp)
+		return NULL;
+	return bp;
+}
+
+
+struct mediabufs_ctl {
+	int vfd,
+	struct buf_pool * src;
+	struct buf_pool * dst;
+	struct polltask * pt;
+	struct pollqueue * pq;
+	struct v4l2_format src_fmt;
+	struct v4l2_format dst_fmt;
+}
+
+static int qent_v4l2_queue(struct mediabuf_qent *const be,
+			   const int vfd, struct media_request *const mreq,
+			   const struct v4l2_format *const fmt,
+			   const bool is_dst, const bool_hold_flag)
+{
+	struct v4l2_buffer buffer = {
+		.type = fmt->type,
+		.memory = V4L2_MEMORY_DMABUF,
+		.index = be->index
+	};
+	struct v4l2_plane planes[VIDEO_MAX_PLANES] = {{0}};
+
+	if (V4L2_TYPE_IS_MULTIPLANAR(fmt->type)) {
+		unsigned int i;
+		for (i = 0; i < VIDEO_MAX_PLANES && be->dh[i]; ++i) {
+			if (is_dst)
+				dmabuf_len_set(be->dh[i], 0);
+
+			/* *** Really need a pixdesc rather than a format so we can fill in data_offset */
+			planes[i].length = dmabuf_size(be->dh[i]);
+			planes[i].bytesused = dmabuf_len(be->dh[i]);
+			planes[i].m.fd = dmabuf_fd(be->dh[i]);
+		}
+		buffer.m.planes = planes;
+		buffer.m.length = i;
+	}
+	else {
+		if (is_dst)
+			dmabuf_len_set(be->dh[0], 0);
+
+		buffer.bytesused = dmabuf_len(be->dh[0]);
+		buffer.length = dmabuf_size(be->dh[0]);
+		buffer.m.fd = dmabuf_fd(be->dh[0]);
+	}
+
+	if (!is_dst && mreq) {
+		buffer.flags = V4L2_BUF_FLAG_REQUEST_FD;
+		buffer.request_fd = media_request_fd(mreq);
+		if (hold_flag)
+			buffer.flags |= V4L2_BUF_FLAG_M2M_HOLD_CAPTURE_BUF;
+	}
+
+	if (is_dst)
+		be->timestamp = (struct timeval){0,0};
+
+	buffer.timestamp = be->timestamp;
+
+	while (ioctl(vfd, VIDIOC_QBUF, &buffer)) {
+		const int err = errno;
+		if (err != EINTR) {
+			request_log("%s: Failed to Q buffer: err=%d (%s)\n", __func__, err, strerror(err));
+			return -err;
+		}
+	}
+}
+
+static struct mediabuf_qent * qent_dequeue(struct buf_pool *const bp,
+				     const int vfd,
+				     const enum v4l2_buf_type buftype)
+{
+	int fd;
+	struct mediabuf_qent *be;
+	const bool mp = V4L2_TYPE_IS_MULTIPLANAR(buftype);
+	struct v4l2_plane planes[VIDEO_MAX_PLANES] = {{0}};
+	struct v4l2_buffer buffer = {
+		.type =  buftype,
+		.memory = V4L2_MEMORY_DMABUF
+	};
+	if (mp)
+		buffer.m.planes = &planes;
+
+	while ((rc = ioctl(vfd, VIDIOC_DQBUF, &buffer)) != 0 &&
+	       errno == EINTR)
+		/* Loop */;
+	if (rc) {
+		request_log("Error DQing buffer\n");
+		return NULL;
+	}
+
+	fd = mp ? planes[0].m.fd : buffer.m.fd;
+	be = dmabuf_queue_extract_fd(bp, fd);
+	if (!be) {
+		request_log("Failed to find fd %d in src Q\n", fd);
+		return NULL;
+	}
+
+	be->status = (buffer.flags & V4L2_BUF_FLAG_ERROR) ? QENT_ERROR : QENT_DONE;
+	return be;
+}
+
+static struct int qent_queue(const int vfd, struct mediabuf_qent *const be,
+			     const enum v4l2_buf_type buftype,
+			     struct media_request *const mreq, bool hold_flag)
+{
+	const bool issrc = V4L2_TYPE_IS_OUTPUT(buftype);
+	const bool mp = V4L2_TYPE_IS_MULTIPLANAR(buftype);
+	struct v4l2_plane planes[VIDEO_MAX_PLANES] = {{0}};
+	struct v4l2_buffer buffer = {
+		.type =  buftype,
+		.flags = (!mreq ? 0 :
+			  (V4L2_BUF_FLAG_REQUEST_FD |
+			   (!hold_flag ? 0 : V4L2_BUF_FLAG_M2M_HOLD_CAPTURE_BUF));
+		.index = be->index,
+		.memory = V4L2_MEMORY_DMABUF,
+		.request_fd = media_request_fd(mreq);
+	};
+	if (mp) {
+		unsigned int i;
+		buffer.m.planes = &planes;
+		for (i = 0; i < VIDEO_MAX_PLANES && be->dh[i]; ++i) {
+			planes[i].bytesused = !issrc ? 0 : dmabuf_len(be->dh[i]);
+			planes[i].length = dmabuf_size(be->dh[i]);
+			planes[i].m.fd = dmabuf_fd(be->dh[i]);
+		}
+		buffer.length = i;
+	}
+	else {
+		buffer.bytesused = !issrc ? 0 : dmabuf_len(be->dh[0]);
+		buffer.length = dmabuf_size(be->dh[0]);
+		buffer.m.fd = dmabuf_fd(be->dh[0]);
+	}
+
+	if (issrc)
+		buffer.timestamp = be->timestamp;
+
+	while ((rc = ioctl(vfd, VIDIOC_QBUF, &buffer)) != 0 &&
+	       errno == EINTR)
+		/* Loop */;
+	if (rc) {
+		request_log("Error Qing buffer\n");
+		return NULL;
+	}
+
+}
+
+static void rw_poll_cb(void * v, short revents)
+{
+	struct mediabufs_ctl *const rw = v;
+	struct v4l2_plane planes[VIDEO_MAX_PLANES] = {{0}};
+	struct mediabuf_qent *be;
+
+	request_log("%s: revents=%#x", __func__, revents);
+
+	if ((revents & POLL_IN) != 0) {
+		/* Got a src buffer - just recycle it */
+		be = qent_dequeue(rw->src, rw->vfd, rw->src_buftype);
+		if (be)
+		       	dmabuf_qent_put_free(rw->src, be);
+	}
+	if ((revents & POLL_OUT) != 0) {
+		/* Got a dst buffer - dequeue sets status */
+		qent_dequeue(rw->dst, rw->vfd, rw->dst_buftype);
+	}
+
+	/* Reschedule */
+	pollqueue_add_task(rq->pq, rw->pt);
+}
+
+int qent_src_params_set(struct mediabuf_qent *const be, const struct timeval * timestamp)
+{
+	be->timestamp = *timestamp;
+	return 0;
+}
+
+int qent_src_data_copy(struct mediabuf_qent *const be, const void *const src, const size_t len)
+{
+	void *const dst = dmabuf_map(be->dh[0]);
+	if (!dst)
+		return -1;
+	memcpy(dst, src, len);
+	dmabuf_len_set(be->dh[0], len);
+	return 0;
+}
+
+VAStatus mediabufs_start_request(struct mediabufs_ctl *const mbc,
+			    struct media_request *const mreq,
+			    struct mediabuf_qent *const src_be,
+			    struct mediabuf_qent *const dst_be,
+			    const bool is_final)
+{
+	if (qent_v4l2_queue(src_be, mbc->vfd, mreq, &mbc->src_fmt, false, !is_final))
+		return VA_STATUS_ERROR_OPERATION_FAILED;
+	dmabuf_qent_put_inuse(mbc->src, src_be);
+
+	if (qent_v4l2_queue(dst_be, mbc->vfd, NULL, &mbc->dst_fmt, true, false))
+		return VA_STATUS_ERROR_OPERATION_FAILED;
+	dmabuf_qent_put_inuse(mbc->dst, dst_be);
+
+	if (media_request_start(mreq))
+		return VA_STATUS_ERROR_OPERATION_FAILED;
+
+	return VA_STATUS_SUCCESS;
+}
+
+
+static int qent_alloc_from_fmt(struct mediabuf_qent *const be,
+			       struct dmabufs_ctrl *const dbsc,
+			       const struct v4l2_format *const fmt)
+{
+	if (V4L2_TYPE_IS_MULTIPLANAR(fmt->type)) {
+		unsigned int i;
+		for (i = 0; i != fmt->fmt.pix_mp.num_planes; ++i) {
+			be->dh[i] = dmabuf_alloc(dbsc,
+				fmt->fmt.pix_mp.plane_fmt[i].sizeimage);
+			/* On failure tidy up and die */
+			if (!be->dh[i])
+			{
+				while (i--) {
+					dmabuf_free(dh[i]);
+					dh[i] = NULL;
+				}
+				return -1;
+			}
+		}
+	}
+	else {
+		be->dh[0] = dmabuf_alloc(dbsc, fmt->fmt.pix.sizeimage);
+		if (!be->dh[0])
+			return -1;
+	}
+	return 0;
+}
+
+static VAStatus fmt_set(struct v4l2_format *const fmt, const int fd,
+			const enum v4l2_buf_type buftype,
+			uint32_t pixfmt,
+			const unsigned int width, const unsigned int height)
+{
+	*fmt = (struct v4l2_format){.type = buftype};
+
+	if (V4L2_TYPE_IS_MULTIPLANAR(buftype)) {
+		fmt->fmt.pix_mp.width = width,
+		fmt->fmt.pix_mp.height = height,
+		fmt->fmt.pix_mp.pixelformat = pixfmt
+	}
+	else {
+		fmt->fmt.pix.width = width,
+		fmt->fmt.pix.height = height,
+		fmt->fmt.pix.pixelformat = pixfmt
+	}
+
+	while (!ioctl(fd, VIDIOC_S_FMT, fmt))
+		if (errno != EINTR)
+			return VA_STATUS_ERROR_OPERATION_FAILED;
+
+	return VA_STATUS_SUCCESS;
+}
+
+static VAStatus find_fmt_flags(struct v4l2_format *const fmt,
+				   const int fd, const unsigned int rtfmt,
+				   const unsigned int type_v4l2,
+				   const uint32_t flags_must,
+				   const uint32_t flags_not,
+				   const unsigned int width,
+				   const unsigned int height)
+{
+	unsigned int i;
+	VAStatus status;
+
+	for (i = 0;; ++i) {
+		struct v4l2_fmtdesc fmtdesc = {
+			.index = i,
+			.type = type_v4l2
+		};
+		while (!ioctl(fd, VIDIOC_ENUM_FMT, &fmtdesc)) {
+			if (errno != EINTR)
+				return VA_STATUS_ERROR_UNSUPPORTED_BUFFERTYPE;
+		}
+		if (!(fmtdesc.flags & flags_must) ||
+		    (fmtdesc.flags & flags_not))
+			continue;
+		status = video_fmt_supported(fmtdesc.pixelformat,
+					     fmtdesc.type, rtfmt);
+		if (status == VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT)
+			return status;
+		if (status != VA_STATUS_SUCCESS)
+			continue;
+
+		if (fmt_set(fmt, fd, fmtdesc.type, fmtdesc.pixelformat,
+			    width, height) == VA_STATUS_SUCCESS)
+			return VA_STATUS_SUCCESS;
+	}
+	return 0;
+}
+
+
+/* Wait for qent done */
+VAStatus mediabufs_dst_qent_wait(struct mediabufs_ctl *const mbc,
+				 struct mediabuf_qent *const be)
+{
+	enum qent_status estat;
+	int rv;
+
+	POLLQUEUE_WAIT(rv, mbc->pq, be->status != QUENT_WAITING);
+
+	if (rv <= 0)
+		return VA_STATUS_ERROR_OPERATION_FAILED;
+
+	estat = be->status;
+	be->status = QENT_PENDING;
+
+	return estat == QENT_DONE ? VA_STATUS_SUCCESS :
+		estat == QENT_ERROR ? VA_STATUS_ERROR_DECODING_ERROR :
+			VA_STATUS_ERROR_OPERATION_FAILED;
+}
+
+struct mediabuf_qent* mediabufs_dst_qent_alloc(struct mediabufs_ctl *const mbc, struct dmabufs_ctrl *const dbsc)
+{
+	struct mediabuf_qent *const be = dmabuf_qent_new();
+
+	if (qent_alloc_from_fmt(be, dbsc, &mbc->dst_fmt))
+		goto fail;
+
+	rv = v4l2_create_buffers(vfd, mbc->buftype, V4L2_MEMORY_DMABUF, 1, &be->index);
+	if (rv < 0)
+		goto fail;
+
+	return be;
+
+fail:
+	dmabuf_qent_delete(be);
+	return NULL;
+}
+
+const struct v4l2_format *mediabufs_dst_fmt(struct mediabufs_ctl *const mbc)
+{
+	return &mbc->dst_fmt;
+}
+
+VAStatus mediabufs_dst_fmt_set(struct mediabufs_ctl *const mbc,
+			   const unsigned int rtfmt,
+			   const unsigned int width,
+			   const unsigned int height)
+{
+	VAStatus status;
+	unsigned int i;
+	static const struct {
+		unsigned int type_v4l2;
+		unsigned int flags_must;
+		unsigned int flags_not;
+	} trys[] = {
+		{V4L2_BUF_TYPE_VIDEO_CAPTURE,
+			0, V4L2_FMT_FLAG_EMULATED},
+		{V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
+			0, V4L2_FMT_FLAG_EMULATED},
+		{V4L2_BUF_TYPE_VIDEO_CAPTURE,
+			V4L2_FMT_FLAG_EMULATED, 0},
+		{V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
+			V4L2_FMT_FLAG_EMULATED, 0}
+	};
+	for (i = 0; i != sizeof(trys)/sizeof(trys[0]); ++i) {
+		status = find_fmt_flags(&mbc->dst_fmt, mbc->vfd, rtfmt,
+					    trys[i].type_v4l2,
+					    trys[i].flags_must,
+					    trys[i].flags_not);
+		if (status != VA_STATUS_ERROR_UNSUPPORTED_BUFFERTYPE)
+			return status;
+	}
+	return status;
+}
+
+struct mediabuf_qent *mediabufs_src_qent_get(struct mediabufs_ctl *const mbc)
+{
+	return queue_get_free(mbc->src, mbc->pq);
+}
+
+/* src format must have been set up before this */
+VAStatus mediabufs_src_pool_create(struct mediabufs_ctl *const rw,
+			      struct dmabufs_ctrl * const dbsc,
+			      unsigned int n)
+{
+	unsigned int i;
+	struct mediabuf_qent *const be0 = NULL;
+	struct v4l2_requestbuffers req = {
+		.count = n,
+		.type = rw->src_fmt.type,
+		.memory = V4L2_MEMORY_DMABUF
+	};
+
+	bq_free_all_free(rw->src);
+	while (ioctl(rw->vfd, VIDIO_REQBUFS, &req) == -1) {
+		if (errno != EINTR) {
+			request_log("%s: Failed to request src bufs\n", __func__);
+			return VA_STATUS_ERROR_OPERATION_FAILED;
+		}
+	}
+
+	if (n > buffers.count) {
+		request_log("Only allocated %d of %d src buffers requested\n", buffers.count, n);
+		n = buffers.count;
+	}
+
+	for (i = 0; i != n; ++i) {
+		struct mediabuf_qent *const be = dmabuf_qent_new();
+		if (!be) {
+			request_log("Failed to create src be %d\n", i);
+			goto fail;
+		}
+		if (qent_alloc_from_fmt(be, dbsc, &rw->src_fmt)) {
+			dmabuf_qent_delete(be);
+			goto fail;
+		}
+		be->index = i;
+		bq_put_free(rw->src, be);
+	}
+
+	return VA_STATUS_SUCCESS;
+
+fail:
+	bq_free_all_free(rw->src);
+	req.count = 0;
+	while (ioctl(rw->vfd, VIDIO_REQBUFS, &req) == -1 &&
+	       errno == EINTR)
+		/* Loop */;
+
+	return VA_STATUS_ERROR_OPERATION_FAILED;
+}
+
+
+
+/*
+ * Set stuff order:
+ *  Set src fmt
+ *  Set parameters (sps) on vfd
+ *  Negotiate dst format
+ *  Create src buffers
+*/
+VAStatus mediabufs_stream_on(struct mediabufs_ctl *const mbc)
+{
+	if (v4l2_set_stream(mbc->vfd, mbc->src_fmt.type, true) < 0)
+		return VA_STATUS_ERROR_OPERATION_FAILED;
+
+	if (v4l2_set_stream(mbc->vfd, mbc->dst_fmt.type, true) < 0) {
+		(v4l2_set_stream(ctx->vfd, ctx->output_type, false);
+		return VA_STATUS_ERROR_OPERATION_FAILED;
+	}
+
+	return VA_STATUS_SUCCESS;
+}
+
+VAStatus mediabufs_src_fmt_set(struct mediabufs_ctl *const mbc,
+			       const uint32_t pixfmt,
+			       const uint32_t width, const uint32_t height)
+{
+	mbc->src_fmt.fmt.pix = (struct v4l2_pix_format){
+		.width = width,
+		.height = height,
+		.pixelformat = pixfmt
+	};
+
+	while (ioctl(mbc->vfd, VIDIOC_S_FMT, &mbc->src_fmt))
+		if (errno != EINTR) {
+			request_log("Failed to set format %#x %dx%d\n", pixfmt, width, height);
+			return VA_STATUS_ERROR_OPERATION_FAILED;
+		}
+
+	return VA_STATUS_SUCCESS;
+}
+
+
+
+void mediabufs_ctl_delete(struct mediabufs_ctl **const pmbc)
+{
+	struct mediabufs_ctl **const mbc = *pmbc;
+
+	if (!mbc)
+		return;
+	*pmbc = NULL;
+
+	polltask_delete(mbc->pt);
+
+	/* Empty v4l2 buffer stash */
+	v4l2_request_buffers(mbc->vfd, mbc->src_fmt.type, 0);
+	v4l2_request_buffers(mbc->vfd, mbc->dst_fmt.type, 0);
+
+	dmabuf_queue_delete(mbc->dst);
+	dmabuf_queue_delete(mbc->src);
+	free(mbc);
+}
+
+
+/* One of these per context */
+struct mediabufs_ctl * mediabufs_ctl_new(const int vfd, struct pollqueue *const pq)
+{
+	struct mediabufs_ctl *const mbc = calloc(1, sizeof(*mbc));
+
+	mbc->src_fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+	mbc->dst_fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	mbc->vfd = vfd;
+
+	if (!mbc)
+		return NULL;
+	mbc->src = dmabuf_queue_new(vfd, pq, mbc->src_fmt.type);
+	if (!mbc->src)
+		goto fail1;
+	/* Default cap type to mono-planar */
+	mbc->dst = dmabuf_queue_new(vfd, pq, mbc->dst_fmt.type);
+	if (!mbc->dst)
+		goto fail2;
+	mbc->pt = polltask_new(vfd, POLL_IN | POLL_OUT, rw_poll_cb, mbc);
+	if (!mbc->pt)
+		goto fail3;
+
+	pollqueue_add_task(mbc->pq, mbc->pt);
+
+	return mbc;
+
+fail3:
+	dmabuf_queue_delete(mbc->dst);
+fail2:
+	dmabuf_queue_delete(mbc->src);
+fail1:
+	return NULL;
+}
+
 
 

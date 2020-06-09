@@ -27,6 +27,8 @@
 #ifndef _CONTEXT_H_
 #define _CONTEXT_H_
 
+#include <stdint.h>
+#include <stdbool.h>
 #include <va/va_backend.h>
 
 #include "object_heap.h"
@@ -35,6 +37,9 @@
 #define CONTEXT(data, id)                                                      \
 	((struct object_context *)object_heap_lookup(&(data)->context_heap, id))
 #define CONTEXT_ID_OFFSET		0x02000000
+
+enum v4l2_buf_type;
+struct mediabufs_ctl;
 
 struct object_context {
 	struct object_base base;
@@ -47,6 +52,11 @@ struct object_context {
 	int picture_width;
 	int picture_height;
 	int flags;
+
+	bool stream_started;
+	int vfd;                /* Video fd */
+
+	struct mediabufs_ctl *mbc;
 
 	/* H264 only */
 	struct h264_dpb dpb;

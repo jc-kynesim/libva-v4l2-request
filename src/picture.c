@@ -37,6 +37,9 @@
 
 #include <assert.h>
 #include <string.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
 
 #include <errno.h>
 
@@ -51,27 +54,182 @@
 
 #include "autoconfig.h"
 
+
+struct bit_block {
+	VABufferType buftype;
+	size_t offset;  /* As we may realloc our buffer use offset not ptr */
+	size_t len;
+	unsigned int final_bits;
+	bool render_last;
+};
+
+struct bit_stash {
+	unsigned int block_size;
+	unsigned int block_len;
+	struct bit_block * blocks;
+	size_t data_size;
+	size_t data_len;
+	uint8_t * data;
+};
+
+static void bit_stash_delete(struct bit_stash *const bs)
+{
+	if (!bs)
+		return;
+	free(bs->blocks);
+	free(bs->data);
+	free(bs);
+}
+
+static struct bit_stash * bit_stash_new(void)
+{
+	struct bit_stash *const bs = calloc(1, sizeof(*bs));
+	return bs;
+}
+
+static void bit_stash_reset(struct bit_stash *const bs)
+{
+	bs->block_len = 0;
+	bs->data_len = 0;
+}
+
+static unsigned int bit_blocks(const struct bit_stash *const bs)
+{
+	return bs->block_len;
+}
+
+static VABufferType bit_block_type(const struct bit_stash *const bs,
+				   const unsigned int n)
+{
+	return n >= bs->block_len ? 0 : bs->blocks[n].buftype;
+}
+
+static const void * bit_block_data(const struct bit_stash *const bs,
+				   const unsigned int n)
+{
+	return n >= bs->block_len ? NULL : bs->data + bs->blocks[n].offset;
+}
+
+static size_t bit_block_len(const struct bit_stash *const bs,
+	       		    const unsigned int n)
+{
+	return n >= bs->block_len ? 0 : bs->blocks[n].len;
+}
+
+static bool bit_block_last(const struct bit_stash *const bs,
+	       		   const unsigned int n)
+{
+	return n >= bs->block_len || bs->blocks[n].render_last;
+}
+
+
+static unsigned int sizebits(size_t x)
+{
+	unsigned int n = 0;
+	if ((x >> 16) != 0) {
+		x >>= 16;
+		n += 16;
+	}
+	if ((x >> 8) != 0) {
+		x >>= 8;
+		n += 8;
+	}
+	if ((x >> 4) != 0) {
+		x >>= 4;
+		n += 4;
+	}
+	if ((x >> 2) != 0) {
+		x >>= 2;
+		n += 2;
+	}
+	if ((x >> 1) != 0) {
+		x >>= 1;
+		n += 1;
+	}
+	return n + x;
+}
+
+/* Round up to next pwr of 2
+ * if already a pwr of 2 will pick next pwr
+ */
+static size_t rndup(size_t x)
+{
+	return (size_t)1 << sizebits(x);
+}
+
+#define DATA_ALIGN 64
+
+/* We are going to be doing a lot of copying :-(
+ * make it as easy as possible
+ */
+uint8_t * dataalign(uint8_t * p)
+{
+	return (uint8_t *)(((uintptr_t)p + DATA_ALIGN - 1) & (DATA_ALIGN - 1));
+}
+
+static VAStatus bit_block_add(struct bit_stash *const bs,
+			      const VABufferType buftype,
+			      const void *src, const size_t len,
+			      const unsigned int final_bits,
+			      const bool render_last)
+{
+	struct bit_block *bb = bs->blocks;
+	uint8_t *dst = dataalign(bs->data + bs->data_len);
+	uint8_t *p;
+	size_t alen;
+
+	if (bs->block_len <= bs->block_size) {
+		unsigned int n = bs->block_len < 8 ? 8 : bs->block_len * 2;
+		bb = realloc(bb, n * sizeof(*bb));
+		if (!bb)
+			return VA_STATUS_ERROR_ALLOCATION_FAILED;
+		bs->block_size = n;
+		bs->blocks = bb;
+	}
+
+	alen = (dst + len) - bs->data;
+	if (!bs->data || alen < bs->data_size) {
+		/* Add a little to the alloc size to cope with realloc maybe
+		 * not aligning on the boundary we've picked
+		*/
+		alen = rndup(alen + DATA_ALIGN);
+		p = realloc(bs->data, alen);
+		if (!p)
+			return VA_STATUS_ERROR_ALLOCATION_FAILED;
+		bs->data = p;
+		bs->data_size = alen;
+		dst = dataalign(p + bs->data_len);
+	}
+
+	memcpy(dst, src, len);
+
+	bb[bs->block_len++] = (struct bit_block) {
+		.buftype = buftype,
+		.offset = dst - bs->data,
+		.len = len,
+		.final_bits = final_bits,
+		.render_last = render_last
+	};
+	bs->data_len = dst + len - bs->data;
+
+	return VA_STATUS_SUCCESS;
+}
+
+
 static VAStatus codec_store_buffer(struct request_data *driver_data,
 				   VAProfile profile,
 				   struct object_surface *surface_object,
-				   struct object_buffer *buffer_object)
+				   const VABufferType buftype,
+				   const void * data, const size_t len)
 {
-	switch (buffer_object->type) {
+	switch (buftype) {
 	case VASliceDataBufferType:
-		/*
-		 * Since there is no guarantee that the allocation
-		 * order is the same as the submission order (via
-		 * RenderPicture), we can't use a V4L2 buffer directly
-		 * and have to copy from a regular buffer.
-		 */
 		dmabuf_write_start(surface_object->source_dh);
 		memcpy(surface_object->source_data +
 			       surface_object->slices_size,
-		       buffer_object->data,
-		       buffer_object->size * buffer_object->count);
+		       data, len);
 		dmabuf_write_end(surface_object->source_dh);
-		surface_object->slices_size +=
-			buffer_object->size * buffer_object->count;
+		surface_object->slices_size += len;
 		surface_object->slices_count++;
 		break;
 
@@ -80,7 +238,7 @@ static VAStatus codec_store_buffer(struct request_data *driver_data,
 		case VAProfileMPEG2Simple:
 		case VAProfileMPEG2Main:
 			memcpy(&surface_object->params.mpeg2.picture,
-			       buffer_object->data,
+			       data,
 			       sizeof(surface_object->params.mpeg2.picture));
 			break;
 
@@ -90,14 +248,14 @@ static VAStatus codec_store_buffer(struct request_data *driver_data,
 		case VAProfileH264MultiviewHigh:
 		case VAProfileH264StereoHigh:
 			memcpy(&surface_object->params.h264.picture,
-			       buffer_object->data,
+			       data,
 			       sizeof(surface_object->params.h264.picture));
 			break;
 
 		case VAProfileHEVCMain:
 		case VAProfileHEVCMain10:
 			memcpy(&surface_object->params.h265.picture,
-			       buffer_object->data,
+			       data,
 			       sizeof(surface_object->params.h265.picture));
 			break;
 
@@ -114,14 +272,14 @@ static VAStatus codec_store_buffer(struct request_data *driver_data,
 		case VAProfileH264MultiviewHigh:
 		case VAProfileH264StereoHigh:
 			memcpy(&surface_object->params.h264.slice,
-			       buffer_object->data,
+			       data,
 			       sizeof(surface_object->params.h264.slice));
 			break;
 
 		case VAProfileHEVCMain:
 		case VAProfileHEVCMain10:
 			memcpy(&surface_object->params.h265.slice,
-			       buffer_object->data,
+			       data,
 			       sizeof(surface_object->params.h265.slice));
 			break;
 
@@ -135,7 +293,7 @@ static VAStatus codec_store_buffer(struct request_data *driver_data,
 		case VAProfileMPEG2Simple:
 		case VAProfileMPEG2Main:
 			memcpy(&surface_object->params.mpeg2.iqmatrix,
-			       buffer_object->data,
+			       data,
 			       sizeof(surface_object->params.mpeg2.iqmatrix));
 			surface_object->params.mpeg2.iqmatrix_set = true;
 			break;
@@ -146,14 +304,14 @@ static VAStatus codec_store_buffer(struct request_data *driver_data,
 		case VAProfileH264MultiviewHigh:
 		case VAProfileH264StereoHigh:
 			memcpy(&surface_object->params.h264.matrix,
-			       buffer_object->data,
+			       data,
 			       sizeof(surface_object->params.h264.matrix));
 			break;
 
 		case VAProfileHEVCMain:
 		case VAProfileHEVCMain10:
 			memcpy(&surface_object->params.h265.iqmatrix,
-			       buffer_object->data,
+			       data,
 			       sizeof(surface_object->params.h265.iqmatrix));
 			surface_object->params.h265.iqmatrix_set = true;
 			break;
@@ -211,24 +369,26 @@ static VAStatus codec_set_controls(struct request_data *driver_data,
 }
 
 static VAStatus flush_data(struct request_data *driver_data,
-			   struct object_context *context_object,
-			   struct object_config *config_object,
-			   struct object_surface *surface_object,
+			   struct object_context *ctx,
+			   struct object_config *cfg,
+			   struct object_surface *surf,
 			   bool is_last)
 {
 	struct video_format *video_format;
 	unsigned int output_type, capture_type;
-	int rc;
+	VAStatus rc;
 	struct media_request * mreq;
+	struct mediabuf_qent * src_qent;
 
-	surface_object->needs_flush = false;
+	surf->needs_flush = false;
 
 	video_format = driver_data->video_format;
 	if (video_format == NULL)
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 
-	output_type = v4l2_type_video_output(video_format->v4l2_mplane);
-	capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
+	src_qent = mediabufs_src_qent_get(surf->mbc);
+	if (!src_qent)
+		return VA_STATUS_ERROR_OPERATION_FAILED;
 
 	mreq = media_request_get(driver_data->media_pool);
 	if (!mreq) {
@@ -236,44 +396,20 @@ static VAStatus flush_data(struct request_data *driver_data,
 		return VA_STATUS_ERROR_ALLOCATION_FAILED;
 	}
 
-	rc = codec_set_controls(driver_data, context_object,
-				config_object->profile, mreq, surface_object);
+	rc = codec_set_controls(driver_data, ctx,
+				cfg->profile, mreq, surf);
 	if (rc != VA_STATUS_SUCCESS)
 		return rc;
 
-	rc = v4l2_queue_dmabuf(driver_data->video_fd, mreq,
-			       surface_object->source_dh,
-			       output_type,
-			       &surface_object->timestamp,
-			       surface_object->source_index,
-			       surface_object->slices_size, 1, !is_last);
-	surface_object->slices_size = 0;
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
+	rc = mediabufs_start_request(surf->mbc, mreq,
+				     src_qent,
+				     surf->req_one ? surf->qent : NULL,
+				     is_last);
+	surf->req_one = false;
+	if (rc != VA_STATUS_SUCCESS)
+		return rc;
 
-	if (surface_object->req_one) {
-		surface_object->req_one = false;
-#if 0
-		rc = v4l2_queue_buffer(driver_data->video_fd, NULL, capture_type, NULL,
-				       surface_object->destination_index, 0,
-				       surface_object->destination_buffers_count, false);
-#else
-		rc = v4l2_queue_dmabuf(driver_data->video_fd, NULL,
-				       surface_object->destination_dh[0],
-				       capture_type, NULL,
-				       surface_object->destination_index, 0,
-				       surface_object->destination_buffers_count, false);
-#endif
-		if (rc < 0)
-			return VA_STATUS_ERROR_OPERATION_FAILED;
-	}
-
-	if (media_request_start(mreq)) {
-		request_log("media_request_start failed\n");
-		return VA_STATUS_ERROR_OPERATION_FAILED;
-	}
-
-	return queue_await_completion(driver_data, surface_object, is_last);
+	return queue_await_completion(driver_data, surf, is_last);
 }
 
 VAStatus RequestBeginPicture(VADriverContextP context, VAContextID context_id,
@@ -293,6 +429,11 @@ VAStatus RequestBeginPicture(VADriverContextP context, VAContextID context_id,
 
 	if (surface_object->status == VASurfaceRendering)
 		RequestSyncSurface(context, surface_id);
+
+	/* *** Move to a better stash point than surface */
+	if (surface_object->bit_stash)
+		surface_object->bit_stash = bit_stash_new();
+	bit_stash_reset(surface_object->bit_stash);
 
 	surface_object->status = VASurfaceRendering;
 	context_object->render_surface_id = surface_id;
@@ -315,7 +456,6 @@ VAStatus RequestRenderPicture(VADriverContextP context, VAContextID context_id,
 	struct object_surface *surface_object;
 	struct object_buffer *buffer_object;
 	VAStatus rv;
-	int rc;
 	int i;
 
 	context_object = CONTEXT(driver_data, context_id);
@@ -332,27 +472,58 @@ VAStatus RequestRenderPicture(VADriverContextP context, VAContextID context_id,
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 
 	for (i = 0; i < buffers_count; i++) {
-		if (surface_object->needs_flush) {
-			rv = flush_data(driver_data, context_object, config_object, surface_object, false);
-			if (rv != VA_STATUS_SUCCESS)
-				return rv;
-		}
-
 		buffer_object = BUFFER(driver_data, buffers_ids[i]);
-		if (buffer_object == NULL)
-			return VA_STATUS_ERROR_INVALID_BUFFER;
 
-		rc = codec_store_buffer(driver_data, config_object->profile,
-					surface_object, buffer_object);
-		if (rc != VA_STATUS_SUCCESS)
-			return rc;
-
-		if (buffer_object->type == VASliceDataBufferType)
-			surface_object->needs_flush = true;
+		rv = bit_block_add(surface_object->bit_stash,
+				   buffer_object->type,
+				   buffer_object->data,
+				   buffer_object->size * buffer_object->count,
+				   0,
+				   i + 1 >= buffers_count);
+		if (rv != VA_STATUS_SUCCESS)
+			return rv;
 	}
 
 	return VA_STATUS_SUCCESS;
 }
+static VAStatus stream_start(struct request_data *const rd,
+			     struct object_context *const ctx,
+			     const struct object_config *const cfg,
+			     struct object_surface *const os)
+{
+	int rc;
+	VAStatus status;
+
+	if (ctx->stream_started)
+		return VA_STATUS_SUCESS;
+
+	/* Set controls onto video handle not request */
+	status = codec_set_controls(rd, ctx, cfg->profile, NULL, os);
+	if (status != VA_STATUS_SUCCESS)
+		return status;
+
+	status = mediabufs_dst_fmt_set(ctx->mbc,
+				      os->pd.req_rtfmt,
+				      ctx->picture_width, ctx->picture_height);
+	if (status != VA_STATUS_SUCCESS)
+		return status;
+
+	/* Alloc src buffers */
+	status = mediabufs_src_pool_create(ctx->mbc, rd->dmabufs_ctrl, 6);
+	if (status != VA_STATUS_SUCCESS)
+		return status;
+
+	/* Dst buffer alloc & index part of normal path */
+
+	status = mediabufs_stream_on(ctx->mbc);
+	if (status != VA_STATUS_SUCCESS)
+		return status;
+
+	ctx->stream_started = true;
+
+	return VA_STATUS_SUCCESS;
+}
+
 
 VAStatus RequestEndPicture(VADriverContextP context, VAContextID context_id)
 {
@@ -361,7 +532,10 @@ VAStatus RequestEndPicture(VADriverContextP context, VAContextID context_id)
 	struct object_config *config_object;
 	struct object_surface *surface_object;
 	struct video_format *video_format;
-	VAStatus status;
+	VAStatus rv;
+	unsigned int n;
+	unsigned int i;
+	bool first_decode = true;
 
 	video_format = driver_data->video_format;
 	if (video_format == NULL)
@@ -380,9 +554,39 @@ VAStatus RequestEndPicture(VADriverContextP context, VAContextID context_id)
 	if (surface_object == NULL)
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 
-	status = flush_data(driver_data, context_object, config_object, surface_object, true);
+	n = bit_blocks(surface_object->bit_stash);
+	for (i = 0; i < n; i++) {
+		rv = codec_store_buffer(driver_data, config_object->profile,
+					surface_object,
+					bit_block_type(surface_object->bit_stash, i),
+					bit_block_data(surface_object->bit_stash, i),
+					bit_block_len(surface_object->bit_stash, i));
+		if (rv != VA_STATUS_SUCCESS)
+			return rv;
+
+		if (bit_block_type(surface_object->bit_stash, i) == VASliceDataBufferType)
+			surface_object->needs_flush = true;
+
+		if (bit_block_last(surface_object->bit_stash, i) &&
+		    surface_object->needs_flush) {
+			rv = stream_start(driver_data, context_object, config_object, surface_object);
+			if (rv != VA_STATUS_SUCCESS)
+				return rv;
+
+			if (first_decode) {
+				first_decode = false;
+				rv = surface_attach(surface_object, context_object->mbc, driver_data->dmabufs_ctrl, context_id);
+				if (rv != VA_STATUS_SUCCESS)
+					return rv;
+			}
+
+			rv = flush_data(driver_data, context_object, config_object, surface_object, i + 1 >= n);
+			if (rv != VA_STATUS_SUCCESS)
+				return rv;
+		}
+	}
 
 	context_object->render_surface_id = VA_INVALID_ID;
 
-	return status;
+	return VA_STATUS_SUCCESS;
 }

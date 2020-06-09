@@ -19,7 +19,12 @@ int dmabuf_read_start(struct dmabuf_h * const dh);
 int dmabuf_read_end(struct dmabuf_h * const dh);
 
 int dmabuf_fd(const struct dmabuf_h * const dh);
+/* Allocated size */
 size_t dmabuf_size(const struct dmabuf_h * const dh);
+/* Bytes in use */
+size_t dmabuf_len(const struct dmabuf_h * const dh);
+/* Set bytes in use */
+void dmabuf_len_set(const struct dmabuf_h * const dh, const size_t len);
 void dmabuf_free(struct dmabuf_h * dh);
 
 #endif

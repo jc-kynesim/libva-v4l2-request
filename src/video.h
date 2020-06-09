@@ -25,7 +25,11 @@
 #ifndef _VIDEO_H_
 #define _VIDEO_H_
 
+#include <stdint.h>
 #include <stdbool.h>
+#include <va/va.h>
+
+enum v4l2_buf_type;
 
 struct video_format {
 	char *description;
@@ -40,5 +44,16 @@ struct video_format {
 
 struct video_format *video_format_find(unsigned int pixelformat);
 bool video_format_is_linear(struct video_format *format);
+
+/*
+ * Returns:
+ *  VA_STATUS_SUCCESS                           Supported
+ *  VA_STATUS_ERROR_UNSUPPORTED_BUFFERTYPE      Unsupported buffer for RT
+ *  VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT       Bad RT format
+*/
+VAStatus video_fmt_supported(const uint32_t fmt_v4l2,
+			     const enum v4l2_buf_type type_v4l2,
+			     const unsigned int rtfmt)
+
 
 #endif

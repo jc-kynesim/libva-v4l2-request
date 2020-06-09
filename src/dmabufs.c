@@ -25,6 +25,7 @@ struct dmabufs_ctrl {
 struct dmabuf_h {
 	int fd;
 	size_t size;
+	size_t len;
 	void * mapptr;
 };
 
@@ -93,6 +94,8 @@ int dmabuf_write_end(struct dmabuf_h * const dh)
 
 int dmabuf_read_start(struct dmabuf_h * const dh)
 {
+	request_log("%s: map=%p, size=%#x, end=%p\n",
+		    __func__, dh->mapptr, dh->size, (char *)dh->mapptr + dh->size);
 	return dmabuf_sync(dh, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
 }
 
@@ -132,6 +135,20 @@ size_t dmabuf_size(const struct dmabuf_h * const dh)
 		return 0;
 	return dh->size;
 }
+
+size_t dmabuf_len(const struct dmabuf_h * const dh)
+{
+	if (!dh)
+		return 0;
+	return dh->len;
+}
+
+void dmabuf_len_set(const struct dmabuf_h * const dh, const size_t len)
+{
+	dh->len = len;
+}
+
+
 
 void dmabuf_free(struct dmabuf_h * dh)
 {

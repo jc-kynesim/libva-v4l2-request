@@ -97,3 +97,44 @@ bool video_format_is_linear(struct video_format *format)
 
 	return format->drm_modifier == DRM_FORMAT_MOD_NONE;
 }
+
+
+VAStatus video_fmt_supported(const uint32_t fmt_v4l2,
+			     const enum v4l2_buf_type type_v4l2,
+			     const unsigned int rtfmt)
+{
+	switch (rtfmt) {
+	case VA_RT_FORMAT_YUV420:
+		switch (type_v4l2) {
+		case V4L2_BUF_TYPE_VIDEO_CAPTURE:
+			switch (fmt_v4l2) {
+			case V4L2_PIX_FMT_NV12:
+			case V4L2_PIX_FMT_NV12_COL128:
+				return VA_STATUS_SUCCESS;
+			default:
+				return VA_STATUS_ERROR_UNSUPPORTED_BUFFERTYPE;
+			}
+		case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
+		default:
+			return VA_STATUS_ERROR_UNSUPPORTED_BUFFERTYPE;
+		}
+	case VA_RT_FORMAT_YUV420_10:
+		switch (type_v4l2) {
+		case V4L2_BUF_TYPE_VIDEO_CAPTURE:
+			switch (fmt_v4l2) {
+			case V4L2_PIX_FMT_NV12_10_COL128:
+				return VA_STATUS_SUCCESS;
+			default:
+				return VA_STATUS_ERROR_UNSUPPORTED_BUFFERTYPE;
+			}
+		case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
+		default:
+			return VA_STATUS_ERROR_UNSUPPORTED_BUFFERTYPE;
+		}
+	default:
+		break;
+	}
+	return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
+}
+
+

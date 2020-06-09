@@ -49,7 +49,7 @@
 #include "video.h"
 #include "dmabufs.h"
 
-
+#if 0
 static const struct try_formats {
 	unsigned int va_rt;
 	unsigned int v4l2_fmt;
@@ -60,9 +60,121 @@ static const struct try_formats {
 	{VA_RT_FORMAT_YUV420_10, V4L2_PIX_FMT_NV12_10_COL128},
 	{0, 0}
 };
-
+#endif
 
 VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
+				unsigned int width, unsigned int height,
+				VASurfaceID *surfaces_ids,
+				unsigned int surfaces_count,
+				VASurfaceAttrib *attributes,
+				unsigned int attributes_count)
+{
+	unsigned int i;
+	struct request_data *const rd = context->pDriverData;
+	const unsigned int seq = atomic_fetch_add(&rd->surface_alloc_seq, 1);
+
+	request_log("%s: %dx%d, seq=%u\n", __func__, width, height, seq);
+
+	for (i = 0; i < surfaces_count; i++) {
+		struct object_surface *os;
+		int id = object_heap_allocate(&rd->surface_heap);
+
+		if (id == -1)
+			goto fail;
+
+		os = SURFACE(rd, id);
+		/* Zap all our data whilst avoiding the object control stuff */
+		memset((char*)os + sizeof(os->base), 0,
+		       sizeof(*os) - sizeof(os->base));
+
+		os->alloc_state = SURFACE_NEW;
+		os->rd = rd;
+		os->context_id = VA_INVALID_ID;
+		os->seq = seq;
+		os->pd.req_width =  width;
+		os->pd.req_height = height;
+
+		surfaces_ids[i] = id;
+	}
+	return VA_STATUS_SUCCESS;
+
+fail:
+	while (i--) {
+		struct object_surface *os = SURFACE(rd, surfaces_ids[i]);
+		object_heap_free(&rd->surface_heap, &os->base);
+	}
+	for (i = 0; i < surfaces_count; i++)
+		surfaces_ids[i] = VA_INVALID_SURFACE;
+	return VA_STATUS_ERROR_ALLOCATION_FAILED;
+}
+
+static bool check_dst_bufs(const struct object_surface *const os)
+{
+	unsigned int i;
+	if (os->destination_buffers_count != os->pd.buffer_count)
+		return false;
+	for (i = 0; i != os->pd.buffer_count; ++i) {
+		if (!os->destination_dh[i] ||
+		    dmabuf_size(os->destination_dh[i]) < os->pd.bufs[i].size)
+			return false;
+	}
+	return true;
+}
+
+static void free_dst_bufs(struct object_surface *const os)
+{
+	unsigned int i;
+	for (i = 0; i != VIDEO_MAX_PLANES; ++i) {
+		dmabuf_free(os->destination_dh[i]);
+		os->destination_dh[i] = NULL;
+	}
+	os->destination_buffers_count = 0;
+}
+
+static VAStatus alloc_dst_bufs(struct object_surface *const os)
+{
+	unsigned int i;
+	struct request_data * const rd = os->rd;
+
+	for (i = 0; i != os->pd.buffer_count; ++i) {
+		os->destination_dh[i] =
+			dmabuf_alloc(rd->dmabufs_ctrl, os->pd.bufs[i].size);
+		if (!os->destination_dh[i])
+			goto fail;
+	}
+
+	os->destination_buffers_count = os->pd.buffer_count;
+	return VA_STATUS_SUCCESS;
+
+fail:
+	free_dst_bufs(os);
+	return VA_STATUS_ERROR_ALLOCATION_FAILED;
+}
+
+VAStatus surface_attach(struct object_surface *const os,
+			struct mediabufs_ctl *const mbc,
+			struct dmabufs_ctrl 8const dbsc,
+			const VAContextID id)
+{
+	VAStatus rv;
+
+	if (os->context_id == id)
+		return VA_STATUS_SUCCESS;
+
+	os->qent = mediabufs_dst_qent_alloc(mbc, dbsc);
+	if (!os->qent) {
+		request_log("Failed to alloc surface dst buffers");
+		return VA_STATUS_ERROR_ALLOCATION_FAILED;
+	}
+
+	v4l2_format_to_picdesc(&os->pd, mediabufs_dst_fmt(mbc));
+
+	os->context_id = id;
+	return VA_STATUS_SUCCESS;
+}
+
+#if 0
+VAStatus surface_alloc(VADriverContextP context, unsigned int format,
 				unsigned int width, unsigned int height,
 				VASurfaceID *surfaces_ids,
 				unsigned int surfaces_count,
@@ -80,10 +192,13 @@ VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 	unsigned int index_base;
 	unsigned int index;
 	unsigned int i, j;
+	struct picdesc pds;
+	struct picdesc *const pd = &pds;
 	VASurfaceID id;
 	bool found;
 	int rc;
 
+	request_log("%s: %dx%d\n", __func__, width, height);
 //	if (format != VA_RT_FORMAT_YUV420)
 //		return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
 
@@ -123,6 +238,10 @@ VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 		capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
 	}
 
+	rc = v4l2_try_picdesc(pd, driver_data->video_fd, capture_type, width, height, video_format->v4l2_format);
+	request_log("PD: %dx%d -> rc=%d %dx%d*%d size=%zd\n", pd->req_width, pd->req_height,
+		    rc, pd->planes[0].width, pd->planes[0].height, pd->plane_count, pd->bufs[0].size);
+
 	rc = v4l2_get_format(driver_data->video_fd, capture_type, &format_width,
 			     &format_height, destination_bytesperlines,
 			     destination_sizes, NULL);
@@ -154,7 +273,7 @@ VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 			return VA_STATUS_ERROR_ALLOCATION_FAILED;
 
 		for (j = 0; j < video_format->v4l2_buffers_count; j++) {
-			surface_object->destination_dh[j] = dmabuf_alloc(driver_data->dmabufs_ctrl, destination_sizes[j]);
+			surface_object->destination_dh[j] = dmabuf_alloc(driver_data->dmabufs_ctrl, pd->bufs[j].size);
 			if (!surface_object->destination_dh[j]) {
 				request_log("Failed dest surface alloc\n");
 				return VA_STATUS_ERROR_ALLOCATION_FAILED;
@@ -162,14 +281,7 @@ VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 
 			surface_object->destination_map[j] =
 				dmabuf_map(surface_object->destination_dh[j]);
-#if 0
-				mmap(NULL,
-				     surface_object->destination_map_lengths[j],
-				     PROT_READ | PROT_WRITE, MAP_SHARED,
-				     driver_data->video_fd,
-				     surface_object->destination_map_offsets[j]);
-#endif
-			if (surface_object->destination_map[j] == MAP_FAILED)
+			if (!surface_object->destination_map[j])
 				return VA_STATUS_ERROR_ALLOCATION_FAILED;
 		}
 
@@ -251,8 +363,6 @@ VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 		}
 
 		surface_object->status = VASurfaceReady;
-		surface_object->width = width;
-		surface_object->height = height;
 
 		surface_object->source_index = 0;
 		surface_object->source_data = NULL;
@@ -275,6 +385,7 @@ VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 
 	return VA_STATUS_SUCCESS;
 }
+#endif
 
 VAStatus RequestCreateSurfaces(VADriverContextP context, int width, int height,
 			       int format, int surfaces_count,
@@ -292,20 +403,16 @@ VAStatus RequestDestroySurfaces(VADriverContextP context,
 	unsigned int i, j;
 
 	for (i = 0; i < surfaces_count; i++) {
+		request_log("%s[%d/%d]: id=%#x\n", __func__, i, surfaces_count, surfaces_ids[i]);
+
 		surface_object = SURFACE(driver_data, surfaces_ids[i]);
 		if (surface_object == NULL)
 			return VA_STATUS_ERROR_INVALID_SURFACE;
 
-		if (surface_object->source_data != NULL &&
-		    surface_object->source_size > 0)
-			munmap(surface_object->source_data,
-			       surface_object->source_size);
+		dmabuf_free(surface_object->source_dh);
 
 		for (j = 0; j < surface_object->destination_buffers_count; j++)
-			if (surface_object->destination_map[j] != NULL &&
-			    surface_object->destination_map_lengths[j] > 0)
-				munmap(surface_object->destination_map[j],
-				       surface_object->destination_map_lengths[j]);
+			dmabuf_free(surface_object->destination_dh[j]);
 
 		object_heap_free(&driver_data->surface_heap,
 				 (struct object_base *)surface_object);
@@ -551,10 +658,10 @@ VAStatus RequestExportSurfaceHandle(VADriverContextP context,
 
 	planes_count = surface_object->destination_planes_count;
 
-	surface_descriptor->fourcc = VA_FOURCC_NV12;
-	surface_descriptor->width = surface_object->width;
-	surface_descriptor->height = surface_object->height;
-	surface_descriptor->num_objects = export_fds_count;
+	surface_descriptor->fourcc = surface_object->pd.fmt_vaapi;
+	surface_descriptor->width = surface_object->pd.req_width;
+	surface_descriptor->height = surface_object->pd.req_height;
+	surface_descriptor->num_objects = surface_object->pd.buffer_count;
 
 	size = 0;
 

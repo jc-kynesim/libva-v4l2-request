@@ -272,12 +272,18 @@ void av_rpi_sand30_to_p010(uint8_t * dst, const unsigned int dst_stride,
     }
 }
 
+#ifndef MIN
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+#endif
+
 static void sand_to_planar_nv12(struct request_data *driver_data,
 			   struct object_surface *surface_object,
 			   VAImage *image,
 			   struct object_buffer *buffer_object,
 			   const unsigned int i)
 {
+	unsigned int w = MIN(image->width, surface_object->pd.req_width);
+	unsigned int h = MIN(image->height, surface_object->pd.req_height);
 	av_rpi_sand_to_planar_y((uint8_t *)buffer_object->data + image->offsets[i],
 				image->pitches[i],
 				surface_object->destination_data[i],
@@ -285,9 +291,7 @@ static void sand_to_planar_nv12(struct request_data *driver_data,
 				fourcc_mod_broadcom_param(
 					surface_object->destination_modifiers[0]),
 				0, 0,
-				image->width,
-				i == 0 ? image->height :
-					 image->height / 2);
+				w, i == 0 ? h : h / 2);
 }
 
 static void sand30_to_planar_p010(struct request_data *driver_data,
@@ -298,15 +302,15 @@ static void sand30_to_planar_p010(struct request_data *driver_data,
 {
 	const uint8_t *const s = surface_object->destination_data[i];
 	uint8_t *const d = (uint8_t *)buffer_object->data + image->offsets[i];
+	unsigned int w = MIN(image->width, surface_object->pd.req_width);
+	unsigned int h = MIN(image->height, surface_object->pd.req_height);
 
 	av_rpi_sand30_to_p010(d, image->pitches[i],
 				s, 128,
 				fourcc_mod_broadcom_param(
 					surface_object->destination_modifiers[0]),
 				0, 0,
-				image->width,
-				i == 0 ? image->height :
-					 image->height / 2);
+				w, i == 0 ? h : h / 2);
 }
 
 static VAStatus copy_surface_to_image (struct request_data *driver_data,
@@ -321,8 +325,8 @@ static VAStatus copy_surface_to_image (struct request_data *driver_data,
 	if (buffer_object == NULL)
 		return VA_STATUS_ERROR_INVALID_BUFFER;
 
-	/* **** Loop over all */
-	dmabuf_read_start(surface_object->destination_dh[0]);
+	for (i = 0; i < surface_object->destination_buffers_count; i++)
+		dmabuf_read_start(surface_object->destination_dh[i]);
 
 	for (i = 0; i < surface_object->destination_planes_count; i++) {
 		switch (driver_data->video_format->v4l2_format) {
@@ -352,7 +356,8 @@ static VAStatus copy_surface_to_image (struct request_data *driver_data,
 		}
 	}
 
-	dmabuf_read_end(surface_object->destination_dh[0]);
+	for (i = 0; i < surface_object->destination_buffers_count; i++)
+		dmabuf_read_end(surface_object->destination_dh[i]);
 
 	return status;
 }
@@ -378,8 +383,8 @@ VAStatus RequestDeriveImage(VADriverContextP context, VASurfaceID surface_id,
 
 	format.fourcc = VA_FOURCC_NV12;
 
-	status = RequestCreateImage(context, &format, surface_object->width,
-				    surface_object->height, image);
+	status = RequestCreateImage(context, &format, surface_object->pd.req_width,
+				    surface_object->pd.req_height, image);
 	if (status != VA_STATUS_SUCCESS)
 		return status;
 

@@ -50,4 +50,33 @@ int media_request_fd(const struct media_request * const req);
 int media_request_start(struct media_request * const req);
 
 
+struct mediabufs_ctl;
+struct mediabuf_qent;
+
+int qent_src_params_set(struct mediabuf_qent *const be, const struct timeval * timestamp);
+int qent_src_data_copy(struct mediabuf_qent *const be, const void *const src, const size_t len);
+
+
+struct mediabuf_qent* mediabufs_dst_qent_alloc(struct mediabufs_ctl *const mbc,
+					       struct dmabufs_ctrl *const dbsc)
+VAStatus mediabufs_dst_qent_wait(struct mediabufs_ctl *const mbc,
+				 struct mediabuf_qent *const be)
+
+VAStatus mediabufs_stream_on(struct mediabufs_ctl *const mbc);
+const struct v4l2_format *mediabufs_dst_fmt(struct mediabufs_ctl *const mbc);
+VAStatus mediabufs_dst_fmt_set(struct mediabufs_ctl *const mbc,
+			   const unsigned int rtfmt,
+			   const unsigned int width,
+			   const unsigned int height);
+struct mediabuf_qent *mediabufs_src_qent_get(struct mediabufs_ctl *const mbc);
+VAStatus mediabufs_src_fmt_set(struct mediabufs_ctl *const mbc,
+			       const uint32_t pixfmt,
+			       const uint32_t width, const uint32_t height);
+VAStatus mediabufs_src_pool_create(struct mediabufs_ctl *const rw,
+			      struct dmabufs_ctrl * const dbsc,
+			      unsigned int n);
+struct mediabufs_ctl * mediabufs_ctl_new(const int vfd, struct pollqueue *const pq);
+void mediabufs_ctl_delete(struct mediabufs_ctl **const pmbc);
+
+
 #endif

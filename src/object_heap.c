@@ -90,6 +90,8 @@ static int object_heap_allocate_unlocked(struct object_heap *heap)
 	heap->next_free = object->next_free;
 	object->next_free = OBJECT_HEAP_ALLOCATED;
 
+	/* Clear the non-header space */
+	memset(object + 1, 0, heap->object_size - sizeof(*object));
 	return object->id;
 }
 

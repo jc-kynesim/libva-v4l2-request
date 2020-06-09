@@ -49,6 +49,31 @@
 
 #include "autoconfig.h"
 
+static uint32_t vaprofile_to_pixfmt(const VAProfile profile)
+{
+	switch (profile) {
+
+	case VAProfileMPEG2Simple:
+	case VAProfileMPEG2Main:
+		return V4L2_PIX_FMT_MPEG2_SLICE;
+
+	case VAProfileH264Main:
+	case VAProfileH264High:
+	case VAProfileH264ConstrainedBaseline:
+	case VAProfileH264MultiviewHigh:
+	case VAProfileH264StereoHigh:
+		return V4L2_PIX_FMT_H264_SLICE_RAW;
+
+	case VAProfileHEVCMain:
+	case VAProfileHEVCMain10:
+		return V4L2_PIX_FMT_HEVC_SLICE;
+
+	default:
+		break;
+	}
+	return 0;
+}
+
 VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 			      int picture_width, int picture_height, int flags,
 			      VASurfaceID *surfaces_ids, int surfaces_count,
@@ -58,26 +83,9 @@ VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 	struct object_config *config_object;
 	struct object_surface *surface_object;
 	struct object_context *context_object = NULL;
-	struct video_format *video_format;
-	unsigned int length;
-	unsigned int offset;
-	void *source_data = MAP_FAILED;
-	VASurfaceID *ids = NULL;
 	VAContextID id;
 	VAStatus status;
-	unsigned int output_type, capture_type;
 	unsigned int pixelformat;
-	unsigned int index_base;
-	unsigned int index;
-	unsigned int i;
-	int rc;
-
-	video_format = driver_data->video_format;
-	if (video_format == NULL)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
-
-	output_type = v4l2_type_video_output(video_format->v4l2_mplane);
-	capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
 
 	config_object = CONFIG(driver_data, config_id);
 	if (config_object == NULL) {
@@ -93,104 +101,23 @@ VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 	}
 	memset(&context_object->dpb, 0, sizeof(context_object->dpb));
 
-	switch (config_object->profile) {
-
-	case VAProfileMPEG2Simple:
-	case VAProfileMPEG2Main:
-		pixelformat = V4L2_PIX_FMT_MPEG2_SLICE;
-		break;
-
-	case VAProfileH264Main:
-	case VAProfileH264High:
-	case VAProfileH264ConstrainedBaseline:
-	case VAProfileH264MultiviewHigh:
-	case VAProfileH264StereoHigh:
-		pixelformat = V4L2_PIX_FMT_H264_SLICE_RAW;
-		break;
-
-	case VAProfileHEVCMain:
-	case VAProfileHEVCMain10:
-		pixelformat = V4L2_PIX_FMT_HEVC_SLICE;
-		break;
-
-	default:
-		status = VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
+	pixelformat = vaprofile_to_pixfmt(config_object->profile);
+	if (!pixelformat) {
+		request_log("%s: Unknown vaprofle: %#x\n", __func__, config_object->profile);
 		goto error;
 	}
 
-	rc = v4l2_set_format(driver_data->video_fd, output_type, pixelformat,
-			     picture_width, picture_height);
-	if (rc < 0) {
-		status = VA_STATUS_ERROR_OPERATION_FAILED;
+	context_object->mbc = mediabufs_ctl_new(vfd, driver_data->pollqueue);
+	if (!context_object->mbc) {
+		request_log("%s: Failed to create mediabufs_ctl\n", __func__);
 		goto error;
 	}
 
-	rc = v4l2_create_buffers(driver_data->video_fd, output_type,
-				 V4L2_MEMORY_DMABUF,
-				 surfaces_count, &index_base);
-	if (rc < 0) {
-		status = VA_STATUS_ERROR_ALLOCATION_FAILED;
+	status = mediabufs_src_fmt_set(context_object->mbc,
+				       pixelformat,
+				       picture_width, picture_height);
+	if (status != VA_STATUS_SUCCESS)
 		goto error;
-	}
-
-	/*
-	 * The surface_ids array has been allocated by the caller and
-	 * we don't have any indication wrt its life time. Let's make sure
-	 * its life span is under our control.
-	 */
-	ids = malloc(surfaces_count * sizeof(VASurfaceID));
-	if (ids == NULL) {
-		status = VA_STATUS_ERROR_ALLOCATION_FAILED;
-		goto error;
-	}
-
-	memcpy(ids, surfaces_ids, surfaces_count * sizeof(VASurfaceID));
-
-	for (i = 0; i < surfaces_count; i++) {
-		index = index_base + i;
-
-		surface_object = SURFACE(driver_data, surfaces_ids[i]);
-		if (surface_object == NULL) {
-			status = VA_STATUS_ERROR_INVALID_SURFACE;
-			goto error;
-		}
-
-#if 1
-		length = 0x100000;
-		surface_object->source_dh = dmabuf_alloc(driver_data->dmabufs_ctrl, length);
-		source_data = dmabuf_map(surface_object->source_dh);
-#else
-		rc = v4l2_query_buffer(driver_data->video_fd, output_type,
-				       index, &length, &offset, 1);
-		if (rc < 0) {
-			status = VA_STATUS_ERROR_ALLOCATION_FAILED;
-			goto error;
-		}
-
-		source_data = mmap(NULL, length, PROT_READ | PROT_WRITE,
-				   MAP_SHARED, driver_data->video_fd, offset);
-		if (source_data == MAP_FAILED) {
-			status = VA_STATUS_ERROR_ALLOCATION_FAILED;
-			goto error;
-		}
-#endif
-
-		surface_object->source_index = index;
-		surface_object->source_data = source_data;
-		surface_object->source_size = length;
-	}
-
-	rc = v4l2_set_stream(driver_data->video_fd, output_type, true);
-	if (rc < 0) {
-		status = VA_STATUS_ERROR_OPERATION_FAILED;
-		goto error;
-	}
-
-	rc = v4l2_set_stream(driver_data->video_fd, capture_type, true);
-	if (rc < 0) {
-		status = VA_STATUS_ERROR_OPERATION_FAILED;
-		goto error;
-	}
 
 	context_object->config_id = config_id;
 	context_object->render_surface_id = VA_INVALID_ID;
@@ -206,12 +133,6 @@ VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 	goto complete;
 
 error:
-	if (source_data != MAP_FAILED)
-		munmap(source_data, length);
-
-	if (ids != NULL)
-		free(ids);
-
 	if (context_object != NULL)
 		object_heap_free(&driver_data->context_heap,
 				 (struct object_base *)context_object);
@@ -224,49 +145,15 @@ VAStatus RequestDestroyContext(VADriverContextP context, VAContextID context_id)
 {
 	struct request_data *driver_data = context->pDriverData;
 	struct object_context *context_object;
-	struct video_format *video_format;
-	unsigned int output_type, capture_type;
-	int rc;
-
-	video_format = driver_data->video_format;
-	if (video_format == NULL)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
-
-	output_type = v4l2_type_video_output(video_format->v4l2_mplane);
-	capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
 
 	context_object = CONTEXT(driver_data, context_id);
 	if (context_object == NULL)
 		return VA_STATUS_ERROR_INVALID_CONTEXT;
 
-	rc = v4l2_set_stream(driver_data->video_fd, output_type, false);
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
-
-	rc = v4l2_set_stream(driver_data->video_fd, capture_type, false);
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
-
-	/* Buffers liberation */
-	/* *** BUG *** Surface must be destroyed after Context */
-#warning Surfaces must be destroyed after Context so this is wrong
-//	status = RequestDestroySurfaces(context, context_object->surfaces_ids,
-//					context_object->surfaces_count);
-//	if (status != VA_STATUS_SUCCESS)
-//		return VA_STATUS_ERROR_OPERATION_FAILED;
-
-	free(context_object->surfaces_ids);
+	mediabufs_ctl_delete(&context_object->mbc);
 
 	object_heap_free(&driver_data->context_heap,
 			 (struct object_base *)context_object);
-
-	rc = v4l2_request_buffers(driver_data->video_fd, output_type, 0);
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
-
-	rc = v4l2_request_buffers(driver_data->video_fd, capture_type, 0);
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
 
 	return VA_STATUS_SUCCESS;
 }

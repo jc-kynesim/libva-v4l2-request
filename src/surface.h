@@ -32,6 +32,7 @@
 #include <va/va_backend.h>
 
 #include "object_heap.h"
+#include "v4l2.h"
 
 struct dmabuf_h;
 
@@ -39,18 +40,36 @@ struct dmabuf_h;
 	((struct object_surface *)object_heap_lookup(&(data)->surface_heap, id))
 #define SURFACE_ID_OFFSET		0x04000000
 
+enum surface_alloc_state {
+	SURFACE_NEW = 0,
+	SURFACE_ALLOCED
+};
+
+struct request_data;
+struct bit_stash;
+
 struct object_surface {
 	struct object_base base;
 
-	VAStatus status;
-	int width;
-	int height;
+	struct request_data * rd;
+	VAContextID context_id;
 
-	unsigned int source_index;
+	VASurfaceStatus status;
+
+	enum surface_alloc_state alloc_state;
+	unsigned int seq;       /* Sequence of alloc batch */
+
+	struct picdesc pd;
+
+	struct bit_stash * bit_stash;
+
 	void *source_data;
 	unsigned int source_size;
-	struct dmabuf_h * source_dh;
 
+#if 0
+	unsigned int source_index;
+
+	struct dmabuf_h * source_dh;
 	unsigned int destination_index;
 	void *destination_map[VIDEO_MAX_PLANES];
 	unsigned int destination_map_lengths[VIDEO_MAX_PLANES];
@@ -63,6 +82,8 @@ struct object_surface {
 	unsigned int destination_planes_count;
 	unsigned int destination_buffers_count;
 	struct dmabuf_h * destination_dh[VIDEO_MAX_PLANES];
+#endif
+	struct mediabuf_qent * qent;
 
 	unsigned int slices_size;
 	unsigned int slices_count;
@@ -89,7 +110,7 @@ struct object_surface {
 		} h265;
 	} params;
 
-	bool req_one;
+	bool req_one;           /* First decode of frame */
 	bool needs_flush;
 };
 
@@ -134,5 +155,10 @@ VAStatus RequestExportSurfaceHandle(VADriverContextP context,
 struct request_data;
 struct object_surface;
 VAStatus queue_await_completion(struct request_data *driver_data, struct object_surface *surface_object, bool last);
+
+VAStatus surface_attach(struct object_surface *const os,
+			struct mediabufs_ctl *const mbc,
+			struct dmabufs_ctrl 8const dbsc,
+			const VAContextID id);
 
 #endif

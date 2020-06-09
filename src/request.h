@@ -36,6 +36,7 @@
 #include <va/va.h>
 
 #include <linux/videodev2.h>
+#include <stdatomic.h>
 
 struct dmabufs_ctrl;
 
@@ -51,9 +52,14 @@ struct dmabufs_ctrl;
 struct request_data {
 	struct object_heap config_heap;
 	struct object_heap context_heap;
-	struct object_heap surface_heap;
 	struct object_heap buffer_heap;
 	struct object_heap image_heap;
+
+	struct object_heap surface_heap;
+	atomic_uint surface_alloc_seq;
+
+
+
 	int video_fd;
 
 	struct video_format *video_format;
