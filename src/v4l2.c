@@ -35,6 +35,7 @@
 #include "utils.h"
 #include "v4l2.h"
 #include "media.h"
+#include "video.h"
 
 static bool v4l2_type_is_output(unsigned int type)
 {

@@ -216,7 +216,7 @@ static VAStatus bit_block_add(struct bit_stash *const bs,
 }
 
 
-static VAStatus codec_store_buffer(struct request_data *driver_data,
+static VAStatus codec_store_buffer(struct mediabuf_qent *src_qent,
 				   VAProfile profile,
 				   struct object_surface *surface_object,
 				   const VABufferType buftype,
@@ -224,13 +224,7 @@ static VAStatus codec_store_buffer(struct request_data *driver_data,
 {
 	switch (buftype) {
 	case VASliceDataBufferType:
-		dmabuf_write_start(surface_object->source_dh);
-		memcpy(surface_object->source_data +
-			       surface_object->slices_size,
-		       data, len);
-		dmabuf_write_end(surface_object->source_dh);
-		surface_object->slices_size += len;
-		surface_object->slices_count++;
+		qent_src_data_copy(src_qent, data, len);
 		break;
 
 	case VAPictureParameterBufferType:
@@ -374,19 +368,13 @@ static VAStatus flush_data(struct request_data *driver_data,
 			   struct object_surface *surf,
 			   bool is_last)
 {
-	struct video_format *video_format;
-	unsigned int output_type, capture_type;
 	VAStatus rc;
 	struct media_request * mreq;
 	struct mediabuf_qent * src_qent;
 
 	surf->needs_flush = false;
 
-	video_format = driver_data->video_format;
-	if (video_format == NULL)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
-
-	src_qent = mediabufs_src_qent_get(surf->mbc);
+	src_qent = mediabufs_src_qent_get(ctx->mbc);
 	if (!src_qent)
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 
@@ -401,7 +389,7 @@ static VAStatus flush_data(struct request_data *driver_data,
 	if (rc != VA_STATUS_SUCCESS)
 		return rc;
 
-	rc = mediabufs_start_request(surf->mbc, mreq,
+	rc = mediabufs_start_request(ctx->mbc, mreq,
 				     src_qent,
 				     surf->req_one ? surf->qent : NULL,
 				     is_last);
@@ -495,7 +483,7 @@ static VAStatus stream_start(struct request_data *const rd,
 	VAStatus status;
 
 	if (ctx->stream_started)
-		return VA_STATUS_SUCESS;
+		return VA_STATUS_SUCCESS;
 
 	/* Set controls onto video handle not request */
 	status = codec_set_controls(rd, ctx, cfg->profile, NULL, os);
@@ -556,7 +544,8 @@ VAStatus RequestEndPicture(VADriverContextP context, VAContextID context_id)
 
 	n = bit_blocks(surface_object->bit_stash);
 	for (i = 0; i < n; i++) {
-		rv = codec_store_buffer(driver_data, config_object->profile,
+		#warning No src_qent
+		rv = codec_store_buffer(/***** src_qent ****/ NULL, config_object->profile,
 					surface_object,
 					bit_block_type(surface_object->bit_stash, i),
 					bit_block_data(surface_object->bit_stash, i),

@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2018 Paul Kocialkowski <paul.kocialkowski@bootlin.com>
- *
+e.h
+*
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
  * "Software"), to deal in the Software without restriction, including
@@ -33,7 +33,7 @@ struct polltask *polltask_new(const int fd, const short events,
 void polltask_delete(struct polltask * pt);
 
 void pollqueue_add_task(struct pollqueue *const pq, struct polltask *const pt);
-int pollqueue_poll(struct pollqueue *const pq, const int timeout);
+int pollqueue_poll(struct pollqueue *const pq, uint64_t timeout_time);
 struct pollqueue * pollqueue_new(void);
 void pollqueue_delete(struct pollqueue * pq);
 
@@ -52,15 +52,24 @@ int media_request_start(struct media_request * const req);
 
 struct mediabufs_ctl;
 struct mediabuf_qent;
+struct dmabufs_ctrl;
 
 int qent_src_params_set(struct mediabuf_qent *const be, const struct timeval * timestamp);
 int qent_src_data_copy(struct mediabuf_qent *const be, const void *const src, const size_t len);
+int qent_dst_dup_fd(const struct mediabuf_qent *const be, unsigned int plane);
+VAStatus qent_dst_wait(struct mediabuf_qent *const be);
+void qent_dst_delete(struct mediabuf_qent *const be);
+const uint8_t * qent_dst_data(struct mediabuf_qent *const be, unsigned int buf_no);
+VAStatus qent_dst_read_start(struct mediabuf_qent *const be);
+VAStatus qent_dst_read_stop(struct mediabuf_qent *const be);
 
-
+VAStatus mediabufs_start_request(struct mediabufs_ctl *const mbc,
+			    struct media_request *const mreq,
+			    struct mediabuf_qent *const src_be,
+			    struct mediabuf_qent *const dst_be,
+			    const bool is_final);
 struct mediabuf_qent* mediabufs_dst_qent_alloc(struct mediabufs_ctl *const mbc,
-					       struct dmabufs_ctrl *const dbsc)
-VAStatus mediabufs_dst_qent_wait(struct mediabufs_ctl *const mbc,
-				 struct mediabuf_qent *const be)
+					       struct dmabufs_ctrl *const dbsc);
 
 VAStatus mediabufs_stream_on(struct mediabufs_ctl *const mbc);
 const struct v4l2_format *mediabufs_dst_fmt(struct mediabufs_ctl *const mbc);

@@ -53,7 +53,7 @@ bool video_format_is_linear(struct video_format *format);
 */
 VAStatus video_fmt_supported(const uint32_t fmt_v4l2,
 			     const enum v4l2_buf_type type_v4l2,
-			     const unsigned int rtfmt)
+			     const unsigned int rtfmt);
 
 
 #endif

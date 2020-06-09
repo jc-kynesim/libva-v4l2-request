@@ -47,6 +47,7 @@ enum surface_alloc_state {
 
 struct request_data;
 struct bit_stash;
+struct mediabuf_qent;
 
 struct object_surface {
 	struct object_base base;
@@ -83,7 +84,7 @@ struct object_surface {
 	unsigned int destination_buffers_count;
 	struct dmabuf_h * destination_dh[VIDEO_MAX_PLANES];
 #endif
-	struct mediabuf_qent * qent;
+	struct mediabuf_qent *qent;
 
 	unsigned int slices_size;
 	unsigned int slices_count;
@@ -158,7 +159,7 @@ VAStatus queue_await_completion(struct request_data *driver_data, struct object_
 
 VAStatus surface_attach(struct object_surface *const os,
 			struct mediabufs_ctl *const mbc,
-			struct dmabufs_ctrl 8const dbsc,
+			struct dmabufs_ctrl *const dbsc,
 			const VAContextID id);
 
 #endif

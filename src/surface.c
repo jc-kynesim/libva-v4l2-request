@@ -108,56 +108,12 @@ fail:
 	return VA_STATUS_ERROR_ALLOCATION_FAILED;
 }
 
-static bool check_dst_bufs(const struct object_surface *const os)
-{
-	unsigned int i;
-	if (os->destination_buffers_count != os->pd.buffer_count)
-		return false;
-	for (i = 0; i != os->pd.buffer_count; ++i) {
-		if (!os->destination_dh[i] ||
-		    dmabuf_size(os->destination_dh[i]) < os->pd.bufs[i].size)
-			return false;
-	}
-	return true;
-}
-
-static void free_dst_bufs(struct object_surface *const os)
-{
-	unsigned int i;
-	for (i = 0; i != VIDEO_MAX_PLANES; ++i) {
-		dmabuf_free(os->destination_dh[i]);
-		os->destination_dh[i] = NULL;
-	}
-	os->destination_buffers_count = 0;
-}
-
-static VAStatus alloc_dst_bufs(struct object_surface *const os)
-{
-	unsigned int i;
-	struct request_data * const rd = os->rd;
-
-	for (i = 0; i != os->pd.buffer_count; ++i) {
-		os->destination_dh[i] =
-			dmabuf_alloc(rd->dmabufs_ctrl, os->pd.bufs[i].size);
-		if (!os->destination_dh[i])
-			goto fail;
-	}
-
-	os->destination_buffers_count = os->pd.buffer_count;
-	return VA_STATUS_SUCCESS;
-
-fail:
-	free_dst_bufs(os);
-	return VA_STATUS_ERROR_ALLOCATION_FAILED;
-}
 
 VAStatus surface_attach(struct object_surface *const os,
 			struct mediabufs_ctl *const mbc,
-			struct dmabufs_ctrl 8const dbsc,
+			struct dmabufs_ctrl *const dbsc,
 			const VAContextID id)
 {
-	VAStatus rv;
-
 	if (os->context_id == id)
 		return VA_STATUS_SUCCESS;
 
@@ -400,7 +356,7 @@ VAStatus RequestDestroySurfaces(VADriverContextP context,
 {
 	struct request_data *driver_data = context->pDriverData;
 	struct object_surface *surface_object;
-	unsigned int i, j;
+	unsigned int i;
 
 	for (i = 0; i < surfaces_count; i++) {
 		request_log("%s[%d/%d]: id=%#x\n", __func__, i, surfaces_count, surfaces_ids[i]);
@@ -409,10 +365,7 @@ VAStatus RequestDestroySurfaces(VADriverContextP context,
 		if (surface_object == NULL)
 			return VA_STATUS_ERROR_INVALID_SURFACE;
 
-		dmabuf_free(surface_object->source_dh);
-
-		for (j = 0; j < surface_object->destination_buffers_count; j++)
-			dmabuf_free(surface_object->destination_dh[j]);
+		qent_dst_delete(surface_object->qent);
 
 		object_heap_free(&driver_data->surface_heap,
 				 (struct object_base *)surface_object);
@@ -424,26 +377,11 @@ VAStatus RequestDestroySurfaces(VADriverContextP context,
 VAStatus queue_await_completion(struct request_data *driver_data, struct object_surface *surface_object, bool last)
 {
 	VAStatus status;
-	struct video_format *video_format = driver_data->video_format;
-	unsigned int output_type, capture_type;
-	int rc;
-
-	output_type = v4l2_type_video_output(video_format->v4l2_mplane);
-	capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
-
-	rc = v4l2_dequeue_buffer(driver_data->video_fd, -1, output_type,
-				 surface_object->source_index, 1);
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
 
 	if (last) {
-		rc = v4l2_dequeue_buffer(driver_data->video_fd, -1, capture_type,
-					 surface_object->destination_index,
-					 surface_object->destination_buffers_count);
-		if (rc < 0) {
-			status = VA_STATUS_ERROR_OPERATION_FAILED;
+		status = qent_dst_wait(surface_object->qent);
+		if (status != VA_STATUS_SUCCESS)
 			goto error;
-		}
 
 		surface_object->status = VASurfaceDisplaying;
 	}
@@ -456,12 +394,7 @@ error:
 VAStatus RequestSyncSurface(VADriverContextP context, VASurfaceID surface_id)
 {
 	struct request_data *driver_data = context->pDriverData;
-	struct video_format *video_format;
 	struct object_surface *surface_object;
-
-	video_format = driver_data->video_format;
-	if (video_format == NULL)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
 
 	surface_object = SURFACE(driver_data, surface_id);
 	if (surface_object == NULL)
@@ -617,92 +550,49 @@ VAStatus RequestUnlockSurface(VADriverContextP context, VASurfaceID surface_id)
 
 VAStatus RequestExportSurfaceHandle(VADriverContextP context,
 				    VASurfaceID surface_id, uint32_t mem_type,
-				    uint32_t flags, void *descriptor)
+				    uint32_t flags, void *v_desc)
 {
 	struct request_data *driver_data = context->pDriverData;
-	VADRMPRIMESurfaceDescriptor *surface_descriptor = descriptor;
-	struct object_surface *surface_object;
-	struct video_format *video_format;
-	int *export_fds = NULL;
-	unsigned int export_fds_count;
-	unsigned int planes_count;
-	unsigned int capture_type;
-	unsigned int size;
+	VADRMPRIMESurfaceDescriptor *const desc = v_desc;
+	struct object_surface *surf;
 	unsigned int i;
-	VAStatus status;
-	int rc;
-
-	video_format = driver_data->video_format;
-	if (video_format == NULL)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
 
 	if (mem_type != VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2)
 		return VA_STATUS_ERROR_UNSUPPORTED_MEMORY_TYPE;
 
-	surface_object = SURFACE(driver_data, surface_id);
-	if (surface_object == NULL)
+	surf = SURFACE(driver_data, surface_id);
+	if (surf == NULL)
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 
-	export_fds_count = surface_object->destination_buffers_count;
-	export_fds = malloc(export_fds_count * sizeof(*export_fds));
+	*desc = (VADRMPRIMESurfaceDescriptor) {
+		.fourcc         = surf->pd.fmt_vaapi,
+		.width          = surf->pd.req_width,
+		.height         = surf->pd.req_height,
+		.num_objects    = surf->pd.buffer_count,
+		.num_layers     = 1,
+		.layers = {{
+			.drm_format = surf->pd.fmt_drm,
+			.num_planes = surf->pd.plane_count
+		}}
+	};
 
-	capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
+	for (i = 0; i < surf->pd.buffer_count; i++) {
+		desc->objects[i].drm_format_modifier = surf->pd.bufs[i].drm_mod;
+		desc->objects[i].size = surf->pd.bufs[i].size;
+		desc->objects[i].fd = qent_dst_dup_fd(surf->qent, i);
 
-	rc = v4l2_export_buffer(driver_data->video_fd, capture_type,
-				surface_object->destination_index, O_RDONLY,
-				export_fds, export_fds_count);
-	if (rc < 0) {
-		status = VA_STATUS_ERROR_OPERATION_FAILED;
-		goto error;
+		if (desc->objects[i].fd == -1) {
+			while (i--)
+				close(desc->objects[i].fd);
+			return VA_STATUS_ERROR_ALLOCATION_FAILED;
+		}
 	}
 
-	planes_count = surface_object->destination_planes_count;
-
-	surface_descriptor->fourcc = surface_object->pd.fmt_vaapi;
-	surface_descriptor->width = surface_object->pd.req_width;
-	surface_descriptor->height = surface_object->pd.req_height;
-	surface_descriptor->num_objects = surface_object->pd.buffer_count;
-
-	size = 0;
-
-	if (export_fds_count == 1)
-		for (i = 0; i < planes_count; i++)
-			size += surface_object->destination_sizes[i];
-
-	for (i = 0; i < export_fds_count; i++) {
-		surface_descriptor->objects[i].drm_format_modifier =
-		    surface_object[i].destination_modifiers[i];
-		surface_descriptor->objects[i].fd = export_fds[i];
-		surface_descriptor->objects[i].size = export_fds_count == 1 ?
-						      size :
-						      surface_object->destination_sizes[i];
+	for (i = 0; i < surf->pd.plane_count; i++) {
+		desc->layers[0].object_index[i] = surf->pd.planes[i].buf;
+		desc->layers[0].offset[i] = surf->pd.planes[i].offset;
+		desc->layers[0].pitch[i] =  surf->pd.planes[i].stride;
 	}
 
-	surface_descriptor->num_layers = 1;
-
-	surface_descriptor->layers[0].drm_format = video_format->drm_format;
-	surface_descriptor->layers[0].num_planes = planes_count;
-
-	for (i = 0; i < planes_count; i++) {
-		surface_descriptor->layers[0].object_index[i] =
-			export_fds_count == 1 ? 0 : i;
-		surface_descriptor->layers[0].offset[i] =
-			surface_object->destination_offsets[i];
-		surface_descriptor->layers[0].pitch[i] =
-			surface_object->destination_bytesperlines[i];
-	}
-
-	status = VA_STATUS_SUCCESS;
-	goto complete;
-
-error:
-	for (i = 0; i < export_fds_count; i++)
-		if (export_fds[i] >= 0)
-			close(export_fds[i]);
-
-complete:
-	if (export_fds != NULL)
-		free(export_fds);
-
-	return status;
+	return VA_STATUS_SUCCESS;
 }

@@ -24,7 +24,7 @@ size_t dmabuf_size(const struct dmabuf_h * const dh);
 /* Bytes in use */
 size_t dmabuf_len(const struct dmabuf_h * const dh);
 /* Set bytes in use */
-void dmabuf_len_set(const struct dmabuf_h * const dh, const size_t len);
+void dmabuf_len_set(struct dmabuf_h * const dh, const size_t len);
 void dmabuf_free(struct dmabuf_h * dh);
 
 #endif

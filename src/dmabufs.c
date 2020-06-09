@@ -96,6 +96,8 @@ int dmabuf_read_start(struct dmabuf_h * const dh)
 {
 	request_log("%s: map=%p, size=%#x, end=%p\n",
 		    __func__, dh->mapptr, dh->size, (char *)dh->mapptr + dh->size);
+	if (!dmabuf_map(dh))
+		return -1;
 	return dmabuf_sync(dh, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
 }
 
@@ -143,7 +145,7 @@ size_t dmabuf_len(const struct dmabuf_h * const dh)
 	return dh->len;
 }
 
-void dmabuf_len_set(const struct dmabuf_h * const dh, const size_t len)
+void dmabuf_len_set(struct dmabuf_h * const dh, const size_t len)
 {
 	dh->len = len;
 }

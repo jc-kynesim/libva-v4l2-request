@@ -198,16 +198,7 @@ VAStatus RequestAcquireBufferHandle(VADriverContextP context,
 	struct request_data *driver_data = context->pDriverData;
 	struct object_buffer *buffer_object;
 	struct object_surface *surface_object;
-	struct video_format *video_format;
-	unsigned int capture_type;
-	int export_fd;
 	int rc;
-
-	video_format = driver_data->video_format;
-	if (video_format == NULL)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
-
-	capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
 
 	if (buffer_info->mem_type != VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME ||
 	    !video_format_is_linear(driver_data->video_format))
@@ -224,16 +215,14 @@ VAStatus RequestAcquireBufferHandle(VADriverContextP context,
 	if (surface_object == NULL)
 		return VA_STATUS_ERROR_INVALID_BUFFER;
 
-	if (surface_object->destination_buffers_count > 1)
+	if (surface_object->pd.buffer_count > 1)
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 
-	rc = v4l2_export_buffer(driver_data->video_fd, capture_type,
-				surface_object->destination_index, O_RDONLY,
-				&export_fd, 1);
+	rc = qent_dst_dup_fd(surface_object->qent, 0);
 	if (rc < 0)
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 
-	buffer_info->handle = (uintptr_t) export_fd;
+	buffer_info->handle = (uintptr_t)rc;
 	buffer_info->type = buffer_object->type;
 	buffer_info->mem_size = buffer_object->size * buffer_object->count;
 

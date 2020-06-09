@@ -81,7 +81,6 @@ VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 {
 	struct request_data *driver_data = context->pDriverData;
 	struct object_config *config_object;
-	struct object_surface *surface_object;
 	struct object_context *context_object = NULL;
 	VAContextID id;
 	VAStatus status;
@@ -107,7 +106,8 @@ VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 		goto error;
 	}
 
-	context_object->mbc = mediabufs_ctl_new(vfd, driver_data->pollqueue);
+	context_object->vfd = driver_data->video_fd; /*** Actually open it here */
+	context_object->mbc = mediabufs_ctl_new(context_object->vfd, driver_data->pollqueue);
 	if (!context_object->mbc) {
 		request_log("%s: Failed to create mediabufs_ctl\n", __func__);
 		goto error;
@@ -121,7 +121,7 @@ VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 
 	context_object->config_id = config_id;
 	context_object->render_surface_id = VA_INVALID_ID;
-	context_object->surfaces_ids = ids;
+	context_object->surfaces_ids = NULL;
 	context_object->surfaces_count = surfaces_count;
 	context_object->picture_width = picture_width;
 	context_object->picture_height = picture_height;

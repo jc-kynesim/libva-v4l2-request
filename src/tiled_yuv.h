@@ -20,10 +20,10 @@
 #ifndef _TILED_YUV_H_
 #define _TILED_YUV_H_
 
-void tiled_to_planar(void *src, void *dst, unsigned int dst_pitch,
+void tiled_to_planar(const void *src, void *dst, unsigned int dst_pitch,
 		     unsigned int width, unsigned int height);
 
-void tiled_deinterleave_to_planar(void *src, void *dst1, void *dst2,
+void tiled_deinterleave_to_planar(const void *src, void *dst1, void *dst2,
 				  unsigned int dst_pitch, unsigned int width,
 				  unsigned int height);
 

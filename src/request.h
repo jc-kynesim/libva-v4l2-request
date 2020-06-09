@@ -58,8 +58,6 @@ struct request_data {
 	struct object_heap surface_heap;
 	atomic_uint surface_alloc_seq;
 
-
-
 	int video_fd;
 
 	struct video_format *video_format;

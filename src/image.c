@@ -277,45 +277,46 @@ void av_rpi_sand30_to_p010(uint8_t * dst, const unsigned int dst_stride,
 #endif
 
 static void sand_to_planar_nv12(struct request_data *driver_data,
-			   struct object_surface *surface_object,
+			   struct object_surface *const surf,
 			   VAImage *image,
 			   struct object_buffer *buffer_object,
 			   const unsigned int i)
 {
-	unsigned int w = MIN(image->width, surface_object->pd.req_width);
-	unsigned int h = MIN(image->height, surface_object->pd.req_height);
-	av_rpi_sand_to_planar_y((uint8_t *)buffer_object->data + image->offsets[i],
-				image->pitches[i],
-				surface_object->destination_data[i],
-				128,
-				fourcc_mod_broadcom_param(
-					surface_object->destination_modifiers[0]),
+	const uint8_t *const s =
+		qent_dst_data(surf->qent, surf->pd.planes[i].buf) + surf->pd.planes[i].offset;
+	uint8_t *const d = (uint8_t *)buffer_object->data + image->offsets[i];
+	unsigned int w = MIN(image->width,  surf->pd.planes[0].width);
+	unsigned int h = MIN(i == 0 ? image->height : image->height / 2,
+			     surf->pd.planes[i].width);
+	av_rpi_sand_to_planar_y(d, image->pitches[i],
+				s, 128,
+				surf->pd.planes[i].col_height,
 				0, 0,
 				w, i == 0 ? h : h / 2);
 }
 
 static void sand30_to_planar_p010(struct request_data *driver_data,
-			   struct object_surface *surface_object,
+			   struct object_surface *const surf,
 			   VAImage *image,
 			   struct object_buffer *buffer_object,
 			   const unsigned int i)
 {
-	const uint8_t *const s = surface_object->destination_data[i];
+	const uint8_t *const s =
+		qent_dst_data(surf->qent, surf->pd.planes[i].buf) + surf->pd.planes[i].offset;
 	uint8_t *const d = (uint8_t *)buffer_object->data + image->offsets[i];
-	unsigned int w = MIN(image->width, surface_object->pd.req_width);
-	unsigned int h = MIN(image->height, surface_object->pd.req_height);
+	unsigned int w = MIN(image->width,  surf->pd.planes[0].width);
+	unsigned int h = MIN(i == 0 ? image->height : image->height / 2,
+			     surf->pd.planes[i].width);
 
 	av_rpi_sand30_to_p010(d, image->pitches[i],
 				s, 128,
-				fourcc_mod_broadcom_param(
-					surface_object->destination_modifiers[0]),
-				0, 0,
-				w, i == 0 ? h : h / 2);
+			      surf->pd.planes[i].col_height,
+				0, 0, w, h);
 }
 
 static VAStatus copy_surface_to_image (struct request_data *driver_data,
-				       struct object_surface *surface_object,
-				       VAImage *image)
+				       struct object_surface *const surf,
+				       VAImage *const image)
 {
 	struct object_buffer *buffer_object;
 	unsigned int i;
@@ -325,21 +326,23 @@ static VAStatus copy_surface_to_image (struct request_data *driver_data,
 	if (buffer_object == NULL)
 		return VA_STATUS_ERROR_INVALID_BUFFER;
 
-	for (i = 0; i < surface_object->destination_buffers_count; i++)
-		dmabuf_read_start(surface_object->destination_dh[i]);
+	status = qent_dst_read_start(surf->qent);
+	if (status != VA_STATUS_SUCCESS)
+		return status;
 
-	for (i = 0; i < surface_object->destination_planes_count; i++) {
-		switch (driver_data->video_format->v4l2_format) {
+	for (i = 0; i < surf->pd.plane_count; i++) {
+		switch (surf->pd.fmt_v4l2) {
 		case V4L2_PIX_FMT_NV12_COL128:
-			sand_to_planar_nv12(driver_data, surface_object,
+			sand_to_planar_nv12(driver_data, surf,
 					    image, buffer_object, i);
 			break;
 		case V4L2_PIX_FMT_NV12_10_COL128:
-			sand30_to_planar_p010(driver_data, surface_object,
+			sand30_to_planar_p010(driver_data, surf,
 					    image, buffer_object, i);
 			break;
 		case V4L2_PIX_FMT_SUNXI_TILED_NV12:
-			tiled_to_planar(surface_object->destination_data[i],
+			tiled_to_planar(qent_dst_data(surf->qent, surf->pd.planes[i].buf) +
+						surf->pd.planes[i].offset,
 					buffer_object->data + image->offsets[i],
 					image->pitches[i], image->width,
 					i == 0 ? image->height :
@@ -347,8 +350,8 @@ static VAStatus copy_surface_to_image (struct request_data *driver_data,
 			break;
 		case V4L2_PIX_FMT_NV12:
 			memcpy(buffer_object->data + image->offsets[i],
-			       surface_object->destination_data[i],
-			       surface_object->destination_sizes[i]);
+			       qent_dst_data(surf->qent, surf->pd.planes[i].buf) + surf->pd.planes[i].offset,
+			       surf->pd.planes[i].stride * surf->pd.planes[i].height);
 			break;
 		default:
 			status = VA_STATUS_ERROR_UNIMPLEMENTED;
@@ -356,9 +359,7 @@ static VAStatus copy_surface_to_image (struct request_data *driver_data,
 		}
 	}
 
-	for (i = 0; i < surface_object->destination_buffers_count; i++)
-		dmabuf_read_end(surface_object->destination_dh[i]);
-
+	qent_dst_read_stop(surf->qent);
 	return status;
 }
 
