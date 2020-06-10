@@ -168,7 +168,7 @@ static void h265_fill_sps(VAPictureParameterBufferHEVC *picture,
 static void h265_fill_slice_params(VAPictureParameterBufferHEVC *picture,
 				   VASliceParameterBufferHEVC *slice,
 				   struct object_heap *surface_heap,
-				   void *source_data,
+				   const void *source_data,
 				   struct v4l2_ctrl_hevc_slice_params *slice_params)
 {
 	struct object_surface *surface_object;
@@ -183,7 +183,7 @@ static void h265_fill_slice_params(VAPictureParameterBufferHEVC *picture,
 	unsigned int num_rps_poc_st_curr_before;
 	unsigned int num_rps_poc_st_curr_after;
 	unsigned int num_rps_poc_lt_curr;
-	uint8_t *b;
+	const uint8_t *b;
 	unsigned int count;
 	unsigned int o, i, j;
 
@@ -202,7 +202,6 @@ static void h265_fill_slice_params(VAPictureParameterBufferHEVC *picture,
 	 * Search for the first one bit in the previous byte, that marks the
 	 * start of the slice segment to correct the value.
 	 */
-
 	b = source_data + (slice->slice_data_offset +
 			   slice->slice_data_byte_offset) - 1;
 
@@ -423,6 +422,12 @@ int h265_set_controls(struct request_data *driver_data,
 	if (rc < 0)
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 
+	/* If not setting on a request then just set SPS/PPS
+	 * as this is pre-decode setup
+	*/
+	if (!mreq)
+		return VA_STATUS_SUCCESS;
+
 	h265_fill_slice_params(picture, slice, &driver_data->surface_heap,
 			       surface_object->source_data, &slice_params);
 
@@ -443,5 +448,5 @@ int h265_set_controls(struct request_data *driver_data,
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 
 
-	return 0;
+	return VA_STATUS_SUCCESS;
 }

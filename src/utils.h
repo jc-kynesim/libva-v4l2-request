@@ -26,6 +26,10 @@
 #ifndef _UTILS_H_
 #define _UTILS_H_
 
-void request_log(const char *format, ...);
+#define STRING(x) _STRING2(x)
+#define _STRING2(x) #x
+
+#define request_log(...)  _request_log(__FILE__ ":" STRING(__LINE__) ": " __VA_ARGS__)
+void _request_log(const char *format, ...);
 
 #endif

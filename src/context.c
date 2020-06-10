@@ -121,11 +121,14 @@ VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 
 	context_object->config_id = config_id;
 	context_object->render_surface_id = VA_INVALID_ID;
-	context_object->surfaces_ids = NULL;
+	context_object->surfaces_ids = malloc(sizeof(*context_object->surfaces_ids) * surfaces_count);
 	context_object->surfaces_count = surfaces_count;
 	context_object->picture_width = picture_width;
 	context_object->picture_height = picture_height;
 	context_object->flags = flags;
+
+	memcpy(context_object->surfaces_ids, surfaces_ids,
+	       sizeof(*context_object->surfaces_ids) * surfaces_count);
 
 	*context_id = id;
 
@@ -149,6 +152,8 @@ VAStatus RequestDestroyContext(VADriverContextP context, VAContextID context_id)
 	context_object = CONTEXT(driver_data, context_id);
 	if (context_object == NULL)
 		return VA_STATUS_ERROR_INVALID_CONTEXT;
+
+	free(context_object->surfaces_ids);
 
 	mediabufs_ctl_delete(&context_object->mbc);
 

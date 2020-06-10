@@ -50,7 +50,6 @@ VAStatus RequestCreateImage(VADriverContextP context, VAImageFormat *format,
 	unsigned int format_width, format_height;
 	unsigned int size;
 	unsigned int capture_type;
-	struct video_format *video_format;
 	struct object_image *image_object;
 	VABufferID buffer_id;
 	VAImageID id;
@@ -58,15 +57,11 @@ VAStatus RequestCreateImage(VADriverContextP context, VAImageFormat *format,
 	unsigned int i;
 	int rc;
 
-	video_format = driver_data->video_format;
-	if (video_format == NULL)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
-
-
 	/* I think this generates s/w usable images so ignore V4L2 params
 	 * if we are sand as we are always going to copy & rework
 	 */
-	switch (video_format->v4l2_format) {
+#warning Complete bollocks here
+	switch (format->fourcc) {
 	case V4L2_PIX_FMT_NV12_COL128:
 		destination_planes_count = 2;
 		destination_bytesperlines[0] = (width + 15) & ~15;
@@ -84,20 +79,21 @@ VAStatus RequestCreateImage(VADriverContextP context, VAImageFormat *format,
 		size = destination_sizes[0] + destination_sizes[1];
 		break;
 	default:
-		capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
+//		capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
 
 		/*
 		 * FIXME: This should be replaced by per-pixelformat hadling to
 		 * determine the logical plane offsets and sizes;
 		 */
-		rc = v4l2_get_format(driver_data->video_fd, capture_type,
+		rc = v4l2_get_format(driver_data->video_fd, 0 /* capture_type */,
 				     &format_width, &format_height,
 				     destination_bytesperlines, destination_sizes,
 				     &planes_count);
 		if (rc < 0)
 			return VA_STATUS_ERROR_OPERATION_FAILED;
 
-		destination_planes_count = video_format->planes_count;
+//		destination_planes_count = video_format->planes_count;
+		destination_planes_count = 2;
 		size = 0;
 
 		/* The size returned by V4L2 covers buffers, not logical planes. */

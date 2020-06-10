@@ -60,8 +60,6 @@ struct request_data {
 
 	int video_fd;
 
-	struct video_format *video_format;
-
 	struct pollqueue * pollqueue;
 	struct media_pool * media_pool;
 	struct dmabufs_ctrl * dmabufs_ctrl;

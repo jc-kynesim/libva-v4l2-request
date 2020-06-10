@@ -91,7 +91,8 @@ VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 		os->rd = rd;
 		os->context_id = VA_INVALID_ID;
 		os->seq = seq;
-		os->pd.req_width =  width;
+		os->pd.req_rtfmt  = format;
+		os->pd.req_width  = width;
 		os->pd.req_height = height;
 
 		surfaces_ids[i] = id;
@@ -380,8 +381,10 @@ VAStatus queue_await_completion(struct request_data *driver_data, struct object_
 
 	if (last) {
 		status = qent_dst_wait(surface_object->qent);
-		if (status != VA_STATUS_SUCCESS)
+		if (status != VA_STATUS_SUCCESS) {
+			request_log("qent_dst_wait failed\n");
 			goto error;
+		}
 
 		surface_object->status = VASurfaceDisplaying;
 	}
@@ -485,10 +488,10 @@ VAStatus RequestQuerySurfaceAttributes(VADriverContextP context,
 	/*
 	 * First version of DRM prime export does not handle modifiers,
 	 * that are required for supporting the tiled output format.
+	 *
+	 * At this point we haven't nailed down our internal format
 	 */
-
-	if (video_format_is_linear(driver_data->video_format))
-		memory_types |= VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME;
+	//	memory_types |= VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME;
 
 	attributes_list[i].value.value.i = memory_types;
 	i++;

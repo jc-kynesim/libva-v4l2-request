@@ -44,6 +44,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
 
 #include <fcntl.h>
 #include <stdarg.h>
@@ -150,10 +151,14 @@ VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP context)
 	if (video_path == NULL)
 		video_path = "/dev/video0";
 
+	request_log("<<< %s\n", __func__);
+
 //	video_fd = open(video_path, O_RDWR | O_NONBLOCK);
 	video_fd = open(video_path, O_RDWR);
-	if (video_fd < 0)
+	if (video_fd < 0) {
+		request_log("Failed to open '%s': %s\n", video_path, strerror(errno));
 		return VA_STATUS_ERROR_OPERATION_FAILED;
+	}
 
 	rc = v4l2_query_capabilities(video_fd, &capabilities);
 	if (rc < 0) {

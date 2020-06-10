@@ -30,7 +30,7 @@
 #include "request.h"
 #include "utils.h"
 
-void request_log(const char *format, ...)
+void _request_log(const char *format, ...)
 {
 	va_list arguments;
 

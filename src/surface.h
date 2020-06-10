@@ -64,8 +64,8 @@ struct object_surface {
 
 	struct bit_stash * bit_stash;
 
-	void *source_data;
-	unsigned int source_size;
+	const void *source_data;  // The address of the start of the last src chunk
+//	unsigned int source_size;
 
 #if 0
 	unsigned int source_index;

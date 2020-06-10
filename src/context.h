@@ -55,6 +55,7 @@ struct object_context {
 
 	bool stream_started;
 	int vfd;                /* Video fd */
+	struct timeval timeseq;
 
 	struct mediabufs_ctl *mbc;
 

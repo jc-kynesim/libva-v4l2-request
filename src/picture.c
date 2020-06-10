@@ -164,7 +164,7 @@ static size_t rndup(size_t x)
  */
 uint8_t * dataalign(uint8_t * p)
 {
-	return (uint8_t *)(((uintptr_t)p + DATA_ALIGN - 1) & (DATA_ALIGN - 1));
+	return (uint8_t *)(((uintptr_t)p + DATA_ALIGN - 1) & ~(DATA_ALIGN - 1));
 }
 
 static VAStatus bit_block_add(struct bit_stash *const bs,
@@ -188,7 +188,7 @@ static VAStatus bit_block_add(struct bit_stash *const bs,
 	}
 
 	alen = (dst + len) - bs->data;
-	if (!bs->data || alen < bs->data_size) {
+	if (!bs->data || alen > bs->data_size) {
 		/* Add a little to the alloc size to cope with realloc maybe
 		 * not aligning on the boundary we've picked
 		*/
@@ -218,22 +218,27 @@ static VAStatus bit_block_add(struct bit_stash *const bs,
 
 static VAStatus codec_store_buffer(struct mediabuf_qent *src_qent,
 				   VAProfile profile,
-				   struct object_surface *surface_object,
+				   struct object_surface *const surf,
 				   const VABufferType buftype,
 				   const void * data, const size_t len)
 {
+	request_log("%s: buftype=%d, qent=%p\n", __func__, buftype, src_qent);
 	switch (buftype) {
 	case VASliceDataBufferType:
-		qent_src_data_copy(src_qent, data, len);
+		if (src_qent) {
+			surf->source_data = data;
+			surf->needs_flush = true;
+			qent_src_data_copy(src_qent, data, len);
+		}
 		break;
 
 	case VAPictureParameterBufferType:
 		switch (profile) {
 		case VAProfileMPEG2Simple:
 		case VAProfileMPEG2Main:
-			memcpy(&surface_object->params.mpeg2.picture,
+			memcpy(&surf->params.mpeg2.picture,
 			       data,
-			       sizeof(surface_object->params.mpeg2.picture));
+			       sizeof(surf->params.mpeg2.picture));
 			break;
 
 		case VAProfileH264Main:
@@ -241,16 +246,16 @@ static VAStatus codec_store_buffer(struct mediabuf_qent *src_qent,
 		case VAProfileH264ConstrainedBaseline:
 		case VAProfileH264MultiviewHigh:
 		case VAProfileH264StereoHigh:
-			memcpy(&surface_object->params.h264.picture,
+			memcpy(&surf->params.h264.picture,
 			       data,
-			       sizeof(surface_object->params.h264.picture));
+			       sizeof(surf->params.h264.picture));
 			break;
 
 		case VAProfileHEVCMain:
 		case VAProfileHEVCMain10:
-			memcpy(&surface_object->params.h265.picture,
+			memcpy(&surf->params.h265.picture,
 			       data,
-			       sizeof(surface_object->params.h265.picture));
+			       sizeof(surf->params.h265.picture));
 			break;
 
 		default:
@@ -265,16 +270,16 @@ static VAStatus codec_store_buffer(struct mediabuf_qent *src_qent,
 		case VAProfileH264ConstrainedBaseline:
 		case VAProfileH264MultiviewHigh:
 		case VAProfileH264StereoHigh:
-			memcpy(&surface_object->params.h264.slice,
+			memcpy(&surf->params.h264.slice,
 			       data,
-			       sizeof(surface_object->params.h264.slice));
+			       sizeof(surf->params.h264.slice));
 			break;
 
 		case VAProfileHEVCMain:
 		case VAProfileHEVCMain10:
-			memcpy(&surface_object->params.h265.slice,
+			memcpy(&surf->params.h265.slice,
 			       data,
-			       sizeof(surface_object->params.h265.slice));
+			       sizeof(surf->params.h265.slice));
 			break;
 
 		default:
@@ -286,10 +291,10 @@ static VAStatus codec_store_buffer(struct mediabuf_qent *src_qent,
 		switch (profile) {
 		case VAProfileMPEG2Simple:
 		case VAProfileMPEG2Main:
-			memcpy(&surface_object->params.mpeg2.iqmatrix,
+			memcpy(&surf->params.mpeg2.iqmatrix,
 			       data,
-			       sizeof(surface_object->params.mpeg2.iqmatrix));
-			surface_object->params.mpeg2.iqmatrix_set = true;
+			       sizeof(surf->params.mpeg2.iqmatrix));
+			surf->params.mpeg2.iqmatrix_set = true;
 			break;
 
 		case VAProfileH264Main:
@@ -297,17 +302,17 @@ static VAStatus codec_store_buffer(struct mediabuf_qent *src_qent,
 		case VAProfileH264ConstrainedBaseline:
 		case VAProfileH264MultiviewHigh:
 		case VAProfileH264StereoHigh:
-			memcpy(&surface_object->params.h264.matrix,
+			memcpy(&surf->params.h264.matrix,
 			       data,
-			       sizeof(surface_object->params.h264.matrix));
+			       sizeof(surf->params.h264.matrix));
 			break;
 
 		case VAProfileHEVCMain:
 		case VAProfileHEVCMain10:
-			memcpy(&surface_object->params.h265.iqmatrix,
+			memcpy(&surf->params.h265.iqmatrix,
 			       data,
-			       sizeof(surface_object->params.h265.iqmatrix));
-			surface_object->params.h265.iqmatrix_set = true;
+			       sizeof(surf->params.h265.iqmatrix));
+			surf->params.h265.iqmatrix_set = true;
 			break;
 
 		default:
@@ -386,18 +391,28 @@ static VAStatus flush_data(struct request_data *driver_data,
 
 	rc = codec_set_controls(driver_data, ctx,
 				cfg->profile, mreq, surf);
-	if (rc != VA_STATUS_SUCCESS)
+	if (rc != VA_STATUS_SUCCESS) {
+		request_log("codec_set_controls failed\n");
 		return rc;
+	}
 
 	rc = mediabufs_start_request(ctx->mbc, mreq,
 				     src_qent,
 				     surf->req_one ? surf->qent : NULL,
 				     is_last);
+	surf->source_data = NULL;
 	surf->req_one = false;
-	if (rc != VA_STATUS_SUCCESS)
+	if (rc != VA_STATUS_SUCCESS) {
+		request_log("mediabufs_start_request failed\n");
 		return rc;
+	}
 
-	return queue_await_completion(driver_data, surf, is_last);
+	rc = queue_await_completion(driver_data, surf, is_last);
+	if (rc != VA_STATUS_SUCCESS) {
+		request_log("queue_await_completion failed\n");
+		return rc;
+	}
+	return VA_STATUS_SUCCESS;
 }
 
 VAStatus RequestBeginPicture(VADriverContextP context, VAContextID context_id,
@@ -415,11 +430,13 @@ VAStatus RequestBeginPicture(VADriverContextP context, VAContextID context_id,
 	if (surface_object == NULL)
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 
+	request_log("%s: SID=%#x: status=%d\n", __func__, surface_id, surface_object->status);
+
 	if (surface_object->status == VASurfaceRendering)
 		RequestSyncSurface(context, surface_id);
 
-	/* *** Move to a better stash point than surface */
-	if (surface_object->bit_stash)
+	/* *** Move to a better stash point than surface? */
+	if (!surface_object->bit_stash)
 		surface_object->bit_stash = bit_stash_new();
 	bit_stash_reset(surface_object->bit_stash);
 
@@ -479,8 +496,8 @@ static VAStatus stream_start(struct request_data *const rd,
 			     const struct object_config *const cfg,
 			     struct object_surface *const os)
 {
-	int rc;
 	VAStatus status;
+	unsigned int i;
 
 	if (ctx->stream_started)
 		return VA_STATUS_SUCCESS;
@@ -501,7 +518,18 @@ static VAStatus stream_start(struct request_data *const rd,
 	if (status != VA_STATUS_SUCCESS)
 		return status;
 
-	/* Dst buffer alloc & index part of normal path */
+	/* Need dst buffers before stream on */
+	for (i = 0; i < ctx->surfaces_count; ++i) {
+		struct object_surface *surf;
+		surf = SURFACE(rd, ctx->surfaces_ids[i]);
+		if (!surf) {
+			request_log("Surface %#x attached to context not found\n");
+		}
+		else {
+			surface_attach(surf, ctx->mbc, rd->dmabufs_ctrl, ctx->base.id);
+		}
+	}
+
 
 	status = mediabufs_stream_on(ctx->mbc);
 	if (status != VA_STATUS_SUCCESS)
@@ -516,66 +544,78 @@ static VAStatus stream_start(struct request_data *const rd,
 VAStatus RequestEndPicture(VADriverContextP context, VAContextID context_id)
 {
 	struct request_data *driver_data = context->pDriverData;
-	struct object_context *context_object;
-	struct object_config *config_object;
-	struct object_surface *surface_object;
-	struct video_format *video_format;
+	struct object_context *ctx;
+	struct object_config *cfg;
+	struct object_surface *surf;
 	VAStatus rv;
 	unsigned int n;
 	unsigned int i;
 	bool first_decode = true;
+	struct mediabuf_qent *src_qent = NULL;
 
-	video_format = driver_data->video_format;
-	if (video_format == NULL)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
-
-	context_object = CONTEXT(driver_data, context_id);
-	if (context_object == NULL)
+	ctx = CONTEXT(driver_data, context_id);
+	if (ctx == NULL)
 		return VA_STATUS_ERROR_INVALID_CONTEXT;
 
-	config_object = CONFIG(driver_data, context_object->config_id);
-	if (config_object == NULL)
+	cfg = CONFIG(driver_data, ctx->config_id);
+	if (cfg == NULL)
 		return VA_STATUS_ERROR_INVALID_CONFIG;
 
-	surface_object =
-		SURFACE(driver_data, context_object->render_surface_id);
-	if (surface_object == NULL)
+	surf = SURFACE(driver_data, ctx->render_surface_id);
+	if (surf == NULL)
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 
-	n = bit_blocks(surface_object->bit_stash);
+	n = bit_blocks(surf->bit_stash);
+	request_log("Has %d bit objects\n", n);
+
+restart:
+	if (ctx->stream_started) {
+		src_qent = mediabufs_src_qent_get(ctx->mbc);
+		++ctx->timeseq.tv_sec;
+		surf->timestamp = ctx->timeseq;
+		qent_src_params_set(src_qent, &surf->timestamp);
+
+		if (!src_qent) {
+			request_log("Failed to get src qent");
+			return VA_STATUS_ERROR_ALLOCATION_FAILED;
+		}
+	}
+
 	for (i = 0; i < n; i++) {
-		#warning No src_qent
-		rv = codec_store_buffer(/***** src_qent ****/ NULL, config_object->profile,
-					surface_object,
-					bit_block_type(surface_object->bit_stash, i),
-					bit_block_data(surface_object->bit_stash, i),
-					bit_block_len(surface_object->bit_stash, i));
+		rv = codec_store_buffer(src_qent, cfg->profile,
+					surf,
+					bit_block_type(surf->bit_stash, i),
+					bit_block_data(surf->bit_stash, i),
+					bit_block_len(surf->bit_stash, i));
 		if (rv != VA_STATUS_SUCCESS)
 			return rv;
 
-		if (bit_block_type(surface_object->bit_stash, i) == VASliceDataBufferType)
-			surface_object->needs_flush = true;
-
-		if (bit_block_last(surface_object->bit_stash, i) &&
-		    surface_object->needs_flush) {
-			rv = stream_start(driver_data, context_object, config_object, surface_object);
-			if (rv != VA_STATUS_SUCCESS)
-				return rv;
+		if (bit_block_last(surf->bit_stash, i)) {
+			if (!ctx->stream_started) {
+				request_log("Start stream\n");
+				rv = stream_start(driver_data, ctx, cfg, surf);
+				if (rv != VA_STATUS_SUCCESS)
+					return rv;
+				/* Mucky! */
+				goto restart;
+			}
 
 			if (first_decode) {
 				first_decode = false;
-				rv = surface_attach(surface_object, context_object->mbc, driver_data->dmabufs_ctrl, context_id);
+				rv = surface_attach(surf, ctx->mbc, driver_data->dmabufs_ctrl, context_id);
 				if (rv != VA_STATUS_SUCCESS)
 					return rv;
 			}
 
-			rv = flush_data(driver_data, context_object, config_object, surface_object, i + 1 >= n);
-			if (rv != VA_STATUS_SUCCESS)
-				return rv;
+			if (surf->needs_flush) {
+				rv = flush_data(driver_data, ctx, cfg, surf, i + 1 >= n);
+				if (rv != VA_STATUS_SUCCESS)
+					return rv;
+			}
 		}
 	}
 
-	context_object->render_surface_id = VA_INVALID_ID;
+	ctx->render_surface_id = VA_INVALID_ID;
 
 	return VA_STATUS_SUCCESS;
 }
