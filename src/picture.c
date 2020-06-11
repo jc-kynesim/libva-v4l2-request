@@ -222,7 +222,6 @@ static VAStatus codec_store_buffer(struct mediabuf_qent *src_qent,
 				   const VABufferType buftype,
 				   const void * data, const size_t len)
 {
-	request_log("%s: buftype=%d, qent=%p\n", __func__, buftype, src_qent);
 	switch (buftype) {
 	case VASliceDataBufferType:
 		if (src_qent) {
@@ -426,8 +425,6 @@ VAStatus RequestBeginPicture(VADriverContextP context, VAContextID context_id,
 	if (surf == NULL)
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 
-	request_log("%s: SID=%#x: status=%d\n", __func__, surface_id, surf->status);
-
 	if (surf->status == VASurfaceRendering)
 		RequestSyncSurface(context, surface_id);
 
@@ -564,7 +561,6 @@ VAStatus RequestEndPicture(VADriverContextP context, VAContextID context_id)
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 
 	n = bit_blocks(surf->bit_stash);
-	request_log("Has %d bit objects\n", n);
 
 	/* Get SPS/PPS before starting stream */
 	if (!ctx->stream_started) {

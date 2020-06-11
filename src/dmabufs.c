@@ -94,8 +94,6 @@ int dmabuf_write_end(struct dmabuf_h * const dh)
 
 int dmabuf_read_start(struct dmabuf_h * const dh)
 {
-	request_log("%s: map=%p, size=%#x, end=%p\n",
-		    __func__, dh->mapptr, dh->size, (char *)dh->mapptr + dh->size);
 	if (!dmabuf_map(dh))
 		return -1;
 	return dmabuf_sync(dh, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);

@@ -161,10 +161,8 @@ int pollqueue_poll(struct pollqueue *const pq, uint64_t timeout_time)
 	int t = 0;
 	int rv;
 
-	if (!pq->n) {
-		request_log("%s: n=0\n", __func__);
+	if (!pq->n)
 		return 0;
-	}
 
 	do {
 		unsigned int i;
@@ -198,7 +196,6 @@ int pollqueue_poll(struct pollqueue *const pq, uint64_t timeout_time)
 			if (errno != EINTR)
 				return -errno;
 		}
-		request_log("%s: rv=%d\n", __func__, rv);
 
 		/* Safe chain follow - adds are safe too as they add to tail */
 		pt = pq->head;
@@ -343,7 +340,6 @@ struct media_pool * media_pool_new(const char * const media_path,
 		request_log("Failed to open '%s': %s\n", media_path, strerror(errno));
 		goto fail1;
 	}
-	request_log("Opened media device %s\n", media_path);
 
 	for (i = 0; i != n; ++i) {
 		struct media_request * req = malloc(sizeof(*req));
@@ -521,7 +517,6 @@ static struct mediabuf_qent *queue_get_free(struct buf_pool *const bp, struct po
 	int rv;
 
 	POLLQUEUE_WAIT(rv, pq, (buf = bq_get_free(bp)) != NULL);
-	request_log("%s: rv=%d, buf=%p\n", __func__, rv, buf);
 
 	return buf;
 }
@@ -593,18 +588,12 @@ static int qent_v4l2_queue(struct mediabuf_qent *const be,
 		buffer.length = i;
 	}
 	else {
-		uint8_t * b = dmabuf_map(be->dh[0]);
-
 		if (is_dst)
 			dmabuf_len_set(be->dh[0], 0);
 
 		buffer.bytesused = dmabuf_len(be->dh[0]);
 		buffer.length = dmabuf_size(be->dh[0]);
 		buffer.m.fd = dmabuf_fd(be->dh[0]);
-
-		request_log("%s: type=%d, index=%d, used=%d, len=%d: %02x %02x %02x %02x\n", __func__,
-			    buffer.type, buffer.index, buffer.bytesused, buffer.length,
-			    b[0], b[1], b[2], b[3]);
 	}
 
 	if (!is_dst && mreq) {
@@ -674,8 +663,6 @@ static void rw_poll_cb(void * v, short revents)
 	struct mediabufs_ctl *const mbc = v;
 	struct mediabuf_qent *be;
 
-	request_log("%s: revents=%#x\n", __func__, revents);
-
 	if ((revents & POLLOUT) != 0) {
 		/* Got a src buffer - just recycle it */
 		be = qent_dequeue(mbc->src, mbc->vfd, mbc->src_fmt.type);
@@ -701,13 +688,14 @@ int qent_src_params_set(struct mediabuf_qent *const be, const struct timeval * t
 int qent_src_data_copy(struct mediabuf_qent *const be, const void *const src, const size_t len)
 {
 	void * dst;
-	const uint8_t *b = src;
+	if (len > dmabuf_size(be->dh[0])) {
+		request_log("%s: Overrun %d > %d\n", __func__, len, dmabuf_size(be->dh[0]));
+		return -1;
+	}
 	dmabuf_write_start(be->dh[0]);
 	dst = dmabuf_map(be->dh[0]);
 	if (!dst)
 		return -1;
-	request_log("%s:[%d] %02x %02x %02x %02x\n", __func__, len,
-		    b[0], b[1], b[2], b[3]);
 	memcpy(dst, src, len);
 	dmabuf_len_set(be->dh[0], len);
 	dmabuf_write_end(be->dh[0]);
@@ -827,14 +815,9 @@ static VAStatus find_fmt_flags(struct v4l2_format *const fmt,
 			if (errno != EINTR)
 				return VA_STATUS_ERROR_UNSUPPORTED_BUFFERTYPE;
 		}
-		request_log("%s: Try px=%#x, flags=%#x/%#x/%#x, type=%d, rt=%d\n",
-			    __func__, fmtdesc.pixelformat, fmtdesc.flags, flags_must, flags_not,
-					     fmtdesc.type, rtfmt);
 		if ((fmtdesc.flags & flags_must) != flags_must ||
 		    (fmtdesc.flags & flags_not))
 			continue;
-		request_log("%s: Try px=%#x, type=%d, rt=%d\n", __func__, fmtdesc.pixelformat,
-					     fmtdesc.type, rtfmt);
 		status = video_fmt_supported(fmtdesc.pixelformat,
 					     fmtdesc.type, rtfmt);
 		if (status == VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT)
