@@ -732,11 +732,13 @@ VAStatus mediabufs_start_request(struct mediabufs_ctl *const mbc,
 	src_be->pq = mbc->pq;
 	dmabuf_qent_put_inuse(mbc->src, src_be);
 
-	if (dst_be &&
-	    qent_v4l2_queue(dst_be, mbc->vfd, NULL, &mbc->dst_fmt, true, false))
-		return VA_STATUS_ERROR_OPERATION_FAILED;
-	dst_be->pq = mbc->pq;
-	dmabuf_qent_put_inuse(mbc->dst, dst_be);
+	if (dst_be)
+	{
+		if (qent_v4l2_queue(dst_be, mbc->vfd, NULL, &mbc->dst_fmt, true, false))
+			return VA_STATUS_ERROR_OPERATION_FAILED;
+		dst_be->pq = mbc->pq;
+		dmabuf_qent_put_inuse(mbc->dst, dst_be);
+	}
 
 	if (!was_polling)
 		pollqueue_add_task(mbc->pq, mbc->pt);

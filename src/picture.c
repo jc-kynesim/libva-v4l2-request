@@ -566,9 +566,37 @@ VAStatus RequestEndPicture(VADriverContextP context, VAContextID context_id)
 	n = bit_blocks(surf->bit_stash);
 	request_log("Has %d bit objects\n", n);
 
-restart:
+	/* Get SPS/PPS before starting stream */
+	if (!ctx->stream_started) {
+		for (i = 0; i < n; i++) {
+			if (bit_block_type(surf->bit_stash, i) != VAPictureParameterBufferType)
+				continue;
+			rv = codec_store_buffer(src_qent, cfg->profile,
+						surf,
+						bit_block_type(surf->bit_stash, i),
+						bit_block_data(surf->bit_stash, i),
+						bit_block_len(surf->bit_stash, i));
+			if (rv != VA_STATUS_SUCCESS)
+				return rv;
+
+			request_log("Start stream\n");
+			rv = stream_start(driver_data, ctx, cfg, surf);
+			if (rv != VA_STATUS_SUCCESS)
+				return rv;
+			break;
+		}
+		if (!ctx->stream_started) {
+			request_log("No SPS/PPS in picture\n");
+			return VA_STATUS_ERROR_INVALID_PARAMETER;
+		}
+	}
+
+	rv = surface_attach(surf, ctx->mbc, driver_data->dmabufs_ctrl, context_id);
+	if (rv != VA_STATUS_SUCCESS)
+		return rv;
+
 	for (i = 0; i < n; i++) {
-		if (ctx->stream_started && !src_qent) {
+		if (!src_qent) {
 			src_qent = mediabufs_src_qent_get(ctx->mbc);
 			if (!src_qent) {
 				request_log("Failed to get src qent");
@@ -586,29 +614,11 @@ restart:
 		if (rv != VA_STATUS_SUCCESS)
 			return rv;
 
-		if (bit_block_last(surf->bit_stash, i)) {
-			if (!ctx->stream_started) {
-				request_log("Start stream\n");
-				rv = stream_start(driver_data, ctx, cfg, surf);
-				if (rv != VA_STATUS_SUCCESS)
-					return rv;
-				/* Mucky! */
-				goto restart;
-			}
-
-			if (first_decode) {
-				first_decode = false;
-				rv = surface_attach(surf, ctx->mbc, driver_data->dmabufs_ctrl, context_id);
-				if (rv != VA_STATUS_SUCCESS)
-					return rv;
-			}
-
-			if (surf->needs_flush) {
-				rv = flush_data(driver_data, ctx, cfg, surf, src_qent, i + 1 >= n);
-				src_qent = NULL; /* Src ent consumed by being Qed */
-				if (rv != VA_STATUS_SUCCESS)
-					return rv;
-			}
+		if (surf->needs_flush) {
+			rv = flush_data(driver_data, ctx, cfg, surf, src_qent, i + 1 >= n);
+			src_qent = NULL; /* Src ent consumed by being Qed */
+			if (rv != VA_STATUS_SUCCESS)
+				return rv;
 		}
 	}
 
