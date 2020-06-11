@@ -154,6 +154,9 @@ void dmabuf_len_set(struct dmabuf_h * const dh, const size_t len)
 
 void dmabuf_free(struct dmabuf_h * dh)
 {
+	if (!dh)
+		return;
+
 	if (dh->mapptr != MAP_FAILED)
 		munmap(dh->mapptr, dh->size);
 	while (close(dh->fd) == -1 && errno == EINTR)

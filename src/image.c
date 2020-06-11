@@ -40,108 +40,55 @@
 #include "drm_fourcc.h"
 
 VAStatus RequestCreateImage(VADriverContextP context, VAImageFormat *format,
-			    int width, int height, VAImage *image)
+			    int width, int height, VAImage *img)
 {
-	struct request_data *driver_data = context->pDriverData;
-	unsigned int destination_sizes[VIDEO_MAX_PLANES];
-	unsigned int destination_bytesperlines[VIDEO_MAX_PLANES];
-	unsigned int destination_planes_count;
-	unsigned int planes_count;
-	unsigned int format_width, format_height;
-	unsigned int size;
-	unsigned int capture_type;
-	struct object_image *image_object;
-	VABufferID buffer_id;
-	VAImageID id;
+	struct request_data *const driver_data = context->pDriverData;
+	const uint32_t rwidth  = (width + 15) & ~15;
+	const uint32_t rheight = (height + 15) & ~15;
+	const VAImageID id = object_heap_allocate(&driver_data->image_heap);
+	struct object_image *const iobj = IMAGE(driver_data, id);
 	VAStatus status;
-	unsigned int i;
-	int rc;
 
-	/* I think this generates s/w usable images so ignore V4L2 params
-	 * if we are sand as we are always going to copy & rework
-	 */
-#warning Complete bollocks here
-	switch (format->fourcc) {
-	case V4L2_PIX_FMT_NV12_COL128:
-		destination_planes_count = 2;
-		destination_bytesperlines[0] = (width + 15) & ~15;
-		destination_bytesperlines[1] = destination_bytesperlines[0];
-		destination_sizes[0] = ((height + 15) & ~15) * destination_bytesperlines[0];
-		destination_sizes[1] = destination_sizes[0] / 2;
-		size = destination_sizes[0] + destination_sizes[1];
-		break;
-	case V4L2_PIX_FMT_NV12_10_COL128:
-		destination_planes_count = 2;
-		destination_bytesperlines[0] = ((width + 15) & ~15) * 2;
-		destination_bytesperlines[1] = destination_bytesperlines[0];
-		destination_sizes[0] = ((height + 15) & ~15) * destination_bytesperlines[0];
-		destination_sizes[1] = destination_sizes[0] / 2;
-		size = destination_sizes[0] + destination_sizes[1];
-		break;
-	default:
-//		capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
-
-		/*
-		 * FIXME: This should be replaced by per-pixelformat hadling to
-		 * determine the logical plane offsets and sizes;
-		 */
-		rc = v4l2_get_format(driver_data->video_fd, 0 /* capture_type */,
-				     &format_width, &format_height,
-				     destination_bytesperlines, destination_sizes,
-				     &planes_count);
-		if (rc < 0)
-			return VA_STATUS_ERROR_OPERATION_FAILED;
-
-//		destination_planes_count = video_format->planes_count;
-		destination_planes_count = 2;
-		size = 0;
-
-		/* The size returned by V4L2 covers buffers, not logical planes. */
-		for (i = 0; i < planes_count; i++)
-			size += destination_sizes[i];
-
-		/* Here we calculate the sizes assuming NV12. */
-
-		destination_sizes[0] = destination_bytesperlines[0] * format_height;
-
-		for (i = 1; i < destination_planes_count; i++) {
-			destination_bytesperlines[i] = destination_bytesperlines[0];
-			destination_sizes[i] = destination_sizes[0] / 2;
-		}
-		break;
-	}
-
-	id = object_heap_allocate(&driver_data->image_heap);
-	image_object = IMAGE(driver_data, id);
-	if (image_object == NULL)
+	if (!iobj)
 		return VA_STATUS_ERROR_ALLOCATION_FAILED;
 
-	status = RequestCreateBuffer(context, 0, VAImageBufferType, size, 1,
-				     NULL, &buffer_id);
+	switch (format->fourcc) {
+	case VA_FOURCC_NV12:
+		iobj->image = (VAImage){
+			.image_id = id,
+			.format = *format,
+			.width = width,
+			.height = height,
+			.data_size = rwidth * rheight * 3 / 2,
+			.num_planes = 2,
+			.pitches = {rwidth, rwidth},
+			.offsets = {0, rwidth * rheight}
+		};
+		break;
+	case VA_FOURCC_P010:
+		iobj->image = (VAImage){
+			.image_id = id,
+			.format = *format,
+			.width = width,
+			.height = height,
+			.data_size = rwidth * rheight * 3,
+			.num_planes = 2,
+			.pitches = {rwidth * 2, rwidth * 2},
+			.offsets = {0, rwidth * rheight * 2}
+		};
+		break;
+	default:
+		return VA_STATUS_ERROR_INVALID_IMAGE_FORMAT;
+	}
+
+	status = RequestCreateBuffer(context, 0, VAImageBufferType, iobj->image.data_size, 1,
+				     NULL, &iobj->image.buf);
 	if (status != VA_STATUS_SUCCESS) {
-		object_heap_free(&driver_data->image_heap,
-				 (struct object_base *)image_object);
+		object_heap_free(&driver_data->image_heap, &iobj->base);
 		return status;
 	}
 
-	memset(image, 0, sizeof(*image));
-
-	image->format = *format;
-	image->width = width;
-	image->height = height;
-	image->buf = buffer_id;
-	image->image_id = id;
-
-	image->num_planes = destination_planes_count;
-	image->data_size = size;
-
-	for (i = 0; i < image->num_planes; i++) {
-		image->pitches[i] = destination_bytesperlines[i];
-		image->offsets[i] = i > 0 ? destination_sizes[i - 1] : 0;
-	}
-
-	image_object->image = *image;
-
+	*img = iobj->image;
 	return VA_STATUS_SUCCESS;
 }
 
@@ -283,12 +230,12 @@ static void sand_to_planar_nv12(struct request_data *driver_data,
 	uint8_t *const d = (uint8_t *)buffer_object->data + image->offsets[i];
 	unsigned int w = MIN(image->width,  surf->pd.planes[0].width);
 	unsigned int h = MIN(i == 0 ? image->height : image->height / 2,
-			     surf->pd.planes[i].width);
+			     surf->pd.planes[i].height);
+    request_log("%s:[%d] w=%d, h=%d\n", __func__, i, w, h);
 	av_rpi_sand_to_planar_y(d, image->pitches[i],
 				s, 128,
 				surf->pd.planes[i].col_height,
-				0, 0,
-				w, i == 0 ? h : h / 2);
+				0, 0, w, h);
 }
 
 static void sand30_to_planar_p010(struct request_data *driver_data,
@@ -302,7 +249,7 @@ static void sand30_to_planar_p010(struct request_data *driver_data,
 	uint8_t *const d = (uint8_t *)buffer_object->data + image->offsets[i];
 	unsigned int w = MIN(image->width,  surf->pd.planes[0].width);
 	unsigned int h = MIN(i == 0 ? image->height : image->height / 2,
-			     surf->pd.planes[i].width);
+			     surf->pd.planes[i].height);
 
 	av_rpi_sand30_to_p010(d, image->pitches[i],
 				s, 128,
@@ -367,6 +314,8 @@ VAStatus RequestDeriveImage(VADriverContextP context, VASurfaceID surface_id,
 	struct object_buffer *buffer_object;
 	VAImageFormat format;
 	VAStatus status;
+
+    return VA_STATUS_ERROR_UNIMPLEMENTED;
 
 	surface_object = SURFACE(driver_data, surface_id);
 	if (surface_object == NULL)
