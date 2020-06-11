@@ -473,7 +473,7 @@ static struct mediabuf_qent * bq_extract_inuse(struct buf_pool *const bp, struct
 	if (be->prev)
 		be->prev->next = be->next;
 	else
-		bp->free_head = be->next;
+		bp->inuse_head = be->next;
 	be->next = NULL;
 	be->prev = NULL;
 	return be;
@@ -549,7 +549,7 @@ void dmabuf_queue_delete(struct buf_pool *const bp)
 struct buf_pool* dmabuf_queue_new(const int vfd, struct pollqueue * pq,
 				  enum v4l2_buf_type buftype)
 {
-	struct buf_pool *bp = malloc(sizeof(*bp));
+	struct buf_pool *bp = calloc(1, sizeof(*bp));
 	if (!bp)
 		return NULL;
 	return bp;
@@ -593,16 +593,22 @@ static int qent_v4l2_queue(struct mediabuf_qent *const be,
 		buffer.length = i;
 	}
 	else {
+		uint8_t * b = dmabuf_map(be->dh[0]);
+
 		if (is_dst)
 			dmabuf_len_set(be->dh[0], 0);
 
 		buffer.bytesused = dmabuf_len(be->dh[0]);
 		buffer.length = dmabuf_size(be->dh[0]);
 		buffer.m.fd = dmabuf_fd(be->dh[0]);
+
+		request_log("%s: type=%d, index=%d, used=%d, len=%d: %02x %02x %02x %02x\n", __func__,
+			    buffer.type, buffer.index, buffer.bytesused, buffer.length,
+			    b[0], b[1], b[2], b[3]);
 	}
 
 	if (!is_dst && mreq) {
-		buffer.flags = V4L2_BUF_FLAG_REQUEST_FD;
+		buffer.flags |= V4L2_BUF_FLAG_REQUEST_FD;
 		buffer.request_fd = media_request_fd(mreq);
 		if (hold_flag)
 			buffer.flags |= V4L2_BUF_FLAG_M2M_HOLD_CAPTURE_BUF;
@@ -670,13 +676,13 @@ static void rw_poll_cb(void * v, short revents)
 
 	request_log("%s: revents=%#x\n", __func__, revents);
 
-	if ((revents & POLLIN) != 0) {
+	if ((revents & POLLOUT) != 0) {
 		/* Got a src buffer - just recycle it */
 		be = qent_dequeue(mbc->src, mbc->vfd, mbc->src_fmt.type);
 		if (be)
 		       	dmabuf_qent_put_free(mbc->src, be);
 	}
-	if ((revents & POLLOUT) != 0) {
+	if ((revents & POLLIN) != 0) {
 		/* Got a dst buffer - dequeue sets status */
 		qent_dequeue(mbc->dst, mbc->vfd, mbc->dst_fmt.type);
 	}
@@ -695,10 +701,13 @@ int qent_src_params_set(struct mediabuf_qent *const be, const struct timeval * t
 int qent_src_data_copy(struct mediabuf_qent *const be, const void *const src, const size_t len)
 {
 	void * dst;
+	const uint8_t *b = src;
 	dmabuf_write_start(be->dh[0]);
 	dst = dmabuf_map(be->dh[0]);
 	if (!dst)
 		return -1;
+	request_log("%s:[%d] %02x %02x %02x %02x\n", __func__, len,
+		    b[0], b[1], b[2], b[3]);
 	memcpy(dst, src, len);
 	dmabuf_len_set(be->dh[0], len);
 	dmabuf_write_end(be->dh[0]);
@@ -760,7 +769,11 @@ static int qent_alloc_from_fmt(struct mediabuf_qent *const be,
 		}
 	}
 	else {
-		be->dh[0] = dmabuf_alloc(dbsc, fmt->fmt.pix.sizeimage);
+//		be->dh[0] = dmabuf_alloc(dbsc, fmt->fmt.pix.sizeimage);
+		size_t size = fmt->fmt.pix.sizeimage;
+		if (size < 0x100000)
+			size = 0x100000;
+		be->dh[0] = dmabuf_alloc(dbsc, size);
 		if (!be->dh[0])
 			return -1;
 	}
@@ -948,7 +961,8 @@ VAStatus mediabufs_dst_fmt_set(struct mediabufs_ctl *const mbc,
 
 struct mediabuf_qent *mediabufs_src_qent_get(struct mediabufs_ctl *const mbc)
 {
-	return queue_get_free(mbc->src, mbc->pq);
+	struct mediabuf_qent * buf = queue_get_free(mbc->src, mbc->pq);
+	return buf;
 }
 
 /* src format must have been set up before this */

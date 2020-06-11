@@ -371,17 +371,13 @@ static VAStatus flush_data(struct request_data *driver_data,
 			   struct object_context *ctx,
 			   struct object_config *cfg,
 			   struct object_surface *surf,
+			   struct mediabuf_qent * src_qent,
 			   bool is_last)
 {
 	VAStatus rc;
 	struct media_request * mreq;
-	struct mediabuf_qent * src_qent;
 
 	surf->needs_flush = false;
-
-	src_qent = mediabufs_src_qent_get(ctx->mbc);
-	if (!src_qent)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
 
 	mreq = media_request_get(driver_data->media_pool);
 	if (!mreq) {
@@ -419,34 +415,36 @@ VAStatus RequestBeginPicture(VADriverContextP context, VAContextID context_id,
 			     VASurfaceID surface_id)
 {
 	struct request_data *driver_data = context->pDriverData;
-	struct object_context *context_object;
-	struct object_surface *surface_object;
+	struct object_context *ctx;
+	struct object_surface *surf;
 
-	context_object = CONTEXT(driver_data, context_id);
-	if (context_object == NULL)
+	ctx = CONTEXT(driver_data, context_id);
+	if (ctx == NULL)
 		return VA_STATUS_ERROR_INVALID_CONTEXT;
 
-	surface_object = SURFACE(driver_data, surface_id);
-	if (surface_object == NULL)
+	surf = SURFACE(driver_data, surface_id);
+	if (surf == NULL)
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 
-	request_log("%s: SID=%#x: status=%d\n", __func__, surface_id, surface_object->status);
+	request_log("%s: SID=%#x: status=%d\n", __func__, surface_id, surf->status);
 
-	if (surface_object->status == VASurfaceRendering)
+	if (surf->status == VASurfaceRendering)
 		RequestSyncSurface(context, surface_id);
 
 	/* *** Move to a better stash point than surface? */
-	if (!surface_object->bit_stash)
-		surface_object->bit_stash = bit_stash_new();
-	bit_stash_reset(surface_object->bit_stash);
+	if (!surf->bit_stash)
+		surf->bit_stash = bit_stash_new();
+	bit_stash_reset(surf->bit_stash);
 
-	surface_object->status = VASurfaceRendering;
-	context_object->render_surface_id = surface_id;
+	surf->status = VASurfaceRendering;
+	ctx->render_surface_id = surface_id;
 
-	gettimeofday(&surface_object->timestamp, NULL);
+//	gettimeofday(&surf->timestamp, NULL);
 
-	surface_object->req_one = true;
-	surface_object->needs_flush = false;
+	++ctx->timeseq.tv_sec;
+	surf->timestamp = ctx->timeseq;
+	surf->req_one = true;
+	surf->needs_flush = false;
 
 	return VA_STATUS_SUCCESS;
 }
@@ -569,19 +567,17 @@ VAStatus RequestEndPicture(VADriverContextP context, VAContextID context_id)
 	request_log("Has %d bit objects\n", n);
 
 restart:
-	if (ctx->stream_started) {
-		src_qent = mediabufs_src_qent_get(ctx->mbc);
-		++ctx->timeseq.tv_sec;
-		surf->timestamp = ctx->timeseq;
-		qent_src_params_set(src_qent, &surf->timestamp);
-
-		if (!src_qent) {
-			request_log("Failed to get src qent");
-			return VA_STATUS_ERROR_ALLOCATION_FAILED;
-		}
-	}
-
 	for (i = 0; i < n; i++) {
+		if (ctx->stream_started && !src_qent) {
+			src_qent = mediabufs_src_qent_get(ctx->mbc);
+			if (!src_qent) {
+				request_log("Failed to get src qent");
+				return VA_STATUS_ERROR_ALLOCATION_FAILED;
+			}
+
+			qent_src_params_set(src_qent, &surf->timestamp);
+		}
+
 		rv = codec_store_buffer(src_qent, cfg->profile,
 					surf,
 					bit_block_type(surf->bit_stash, i),
@@ -608,11 +604,16 @@ restart:
 			}
 
 			if (surf->needs_flush) {
-				rv = flush_data(driver_data, ctx, cfg, surf, i + 1 >= n);
+				rv = flush_data(driver_data, ctx, cfg, surf, src_qent, i + 1 >= n);
+				src_qent = NULL; /* Src ent consumed by being Qed */
 				if (rv != VA_STATUS_SUCCESS)
 					return rv;
 			}
 		}
+	}
+
+	if (src_qent) {
+		request_log("Yikes! **** SRC_QENT set\n");
 	}
 
 	ctx->render_surface_id = VA_INVALID_ID;
