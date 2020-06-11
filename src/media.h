@@ -72,6 +72,7 @@ struct mediabuf_qent* mediabufs_dst_qent_alloc(struct mediabufs_ctl *const mbc,
 					       struct dmabufs_ctrl *const dbsc);
 
 VAStatus mediabufs_stream_on(struct mediabufs_ctl *const mbc);
+VAStatus mediabufs_stream_off(struct mediabufs_ctl *const mbc);
 const struct v4l2_format *mediabufs_dst_fmt(struct mediabufs_ctl *const mbc);
 VAStatus mediabufs_dst_fmt_set(struct mediabufs_ctl *const mbc,
 			   const unsigned int rtfmt,

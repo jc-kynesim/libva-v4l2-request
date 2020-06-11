@@ -553,6 +553,7 @@ struct buf_pool* dmabuf_queue_new(const int vfd, struct pollqueue * pq,
 
 struct mediabufs_ctl {
 	int vfd;
+	bool stream_on;
 	struct buf_pool * src;
 	struct buf_pool * dst;
 	struct polltask * pt;
@@ -1012,6 +1013,9 @@ fail:
 */
 VAStatus mediabufs_stream_on(struct mediabufs_ctl *const mbc)
 {
+	if (mbc->stream_on)
+		return VA_STATUS_SUCCESS;
+
 	if (v4l2_set_stream(mbc->vfd, mbc->src_fmt.type, true) < 0) {
 		request_log("Failed to set stream on src type %d\n", mbc->src_fmt.type);
 		return VA_STATUS_ERROR_OPERATION_FAILED;
@@ -1023,8 +1027,30 @@ VAStatus mediabufs_stream_on(struct mediabufs_ctl *const mbc)
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 	}
 
+	mbc->stream_on = true;
 	return VA_STATUS_SUCCESS;
 }
+
+VAStatus mediabufs_stream_off(struct mediabufs_ctl *const mbc)
+{
+	VAStatus status = VA_STATUS_SUCCESS;
+
+	if (!mbc->stream_on)
+		return VA_STATUS_SUCCESS;
+
+	if (v4l2_set_stream(mbc->vfd, mbc->src_fmt.type, false) < 0) {
+		request_log("Failed to set stream off src type %d\n", mbc->src_fmt.type);
+		status = VA_STATUS_ERROR_OPERATION_FAILED;
+	}
+
+	if (v4l2_set_stream(mbc->vfd, mbc->dst_fmt.type, false) < 0) {
+		request_log("Failed to set stream off dst type %d\n", mbc->dst_fmt.type);
+		status = VA_STATUS_ERROR_OPERATION_FAILED;
+	}
+
+	return status;
+}
+
 
 VAStatus mediabufs_src_fmt_set(struct mediabufs_ctl *const mbc,
 			       const uint32_t pixfmt,
@@ -1054,6 +1080,8 @@ void mediabufs_ctl_delete(struct mediabufs_ctl **const pmbc)
 	*pmbc = NULL;
 
 	polltask_delete(mbc->pt);
+
+	mediabufs_stream_off(mbc);
 
 	/* Empty v4l2 buffer stash */
 	v4l2_request_buffers(mbc->vfd, mbc->src_fmt.type, 0);
