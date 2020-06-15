@@ -23,225 +23,35 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <stdatomic.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
+#include <unistd.h>
+#include <linux/media.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
-
-#include <stdlib.h>
-#include <unistd.h>
-#include <poll.h>
-#include <fcntl.h>
-#include <time.h>
 #include <sys/ioctl.h>
-#include <semaphore.h>
-#include <pthread.h>
-
 #include <va/va_backend.h>
-#include <linux/media.h>
+
 #include "dmabufs.h"
 #include "media.h"
+#include "pollqueue.h"
 #include "utils.h"
 #include "v4l2.h"
 #include "video.h"
 
-struct pollqueue;
-struct polltask {
-	struct polltask *next;
-	struct polltask *prev;
-	struct pollqueue *q;
-
-	int fd;
-	short events;
-
-	void (*fn)(void *v, short revents);
-	void * v;
-};
-
-struct pollqueue {
-	struct polltask *head;
-	struct polltask *tail;
-
-	unsigned int n;
-	bool modified;
-	unsigned int asize;
-	struct pollfd *a;
-};
-
-struct polltask *polltask_new(const int fd, const short events,
-			      void (*fn)(void *v, short revents), void * v)
-{
-	struct polltask *const pt = malloc(sizeof(*pt));
-	if (!pt)
-		return NULL;
-
-	*pt = (struct polltask){
-		.next = NULL,
-		.prev = NULL,
-		.fd = fd,
-		.events = events,
-		.fn = fn,
-		.v = v
-	};
-	return pt;
-}
-
-static void pollqueue_rem_task(struct pollqueue *const pq, struct polltask *const pt)
-{
-	if (pt->prev)
-		pt->prev->next = pt->next;
-	else
-		pq->head = pt->next;
-	if (pt->next)
-		pt->next->prev = pt->prev;
-	else
-		pq->tail = pt->prev;
-	pt->next = NULL;
-	pt->prev = NULL;
-	pt->q = NULL;
-	--pq->n;
-	pq->modified = true;
-}
-
-void polltask_delete(struct polltask * pt)
-{
-	if (pt->q)
-		pollqueue_rem_task(pt->q, pt);
-	free(pt);
-}
-
-void pollqueue_add_task(struct pollqueue *const pq, struct polltask *const pt)
-{
-	if (pq->tail)
-		pq->tail->next = pt;
-	else
-		pq->head = pt;
-	pt->prev = pq->tail;
-	pt->next = NULL;
-	pt->q = pq;
-	pq->tail = pt;
-	++pq->n;
-	pq->modified = true;
-}
-
-#define POLLQUEUE_TIMEOUT_SECS(x) (pollqueue_now() + (uint64_t)(x) * 1000)
-
-#define POLLQUEUE_WAIT(rv, pq, cond) do {\
-	uint64_t ttime = 0;\
-	rv = pollqueue_poll((pq), 0);\
-	if (rv >= 0) {\
-		while (!(cond)) {\
-			if (!ttime)\
-				ttime = POLLQUEUE_TIMEOUT_SECS(2);\
-			rv = pollqueue_poll((pq), ttime);\
-			if (rv <= 0)\
-				break;\
-		}\
-	}\
-} while(0)
-
-uint64_t pollqueue_now()
-{
-	struct timespec now;
-	if (clock_gettime(CLOCK_MONOTONIC, &now))
-		return 0;
-	return (now.tv_nsec / 1000000) + (uint64_t)now.tv_sec * 1000;
-}
-
-/*
- * -ve error
- * 0   timedout or nothing to do
- * +ve did something
- *
- * *** All of this lot is single-thread only
-*/
-int pollqueue_poll(struct pollqueue *const pq, uint64_t timeout_time)
-{
-	int t = 0;
-	int rv;
-
-	if (!pq->n)
-		return 0;
-
-	do {
-		unsigned int i;
-		struct polltask *pt;
-		int evt;
-		const uint64_t now = timeout_time && !t ? pollqueue_now() : 0;
-		const int timeout = !now || (int64_t)(timeout_time - now) <= 0 ?
-			0 : (int)(timeout_time - now);
-
-		if (pq->modified) {
-			if (pq->asize < pq->n) {
-				free(pq->a);
-				pq->asize = pq->asize ? pq->asize * 2 : 4;
-				pq->a = malloc(pq->asize * sizeof(*pq->a));
-				if (!pq->a) {
-					pq->asize = 0;
-					return -ENOMEM;
-				}
-			}
-
-			for (pt = pq->head, i = 0; pt; pt = pt->next, ++i) {
-				pq->a[i] = (struct pollfd){
-					.fd = pt->fd,
-					.events = pt->events
-				};
-			}
-			pq->modified = false;
-		}
-
-		while ((rv = poll(pq->a, pq->n, timeout)) == -1) {
-			if (errno != EINTR)
-				return -errno;
-		}
-
-		/* Safe chain follow - adds are safe too as they add to tail */
-		pt = pq->head;
-		for (i = 0, evt = 0; evt < rv; ++i) {
-			struct polltask *const pt_next = pt->next;
-
-			if (pq->a[i].revents) {
-				++evt;
-				pollqueue_rem_task(pq, pt);
-				pt->fn(pt->v, pq->a[i].revents);
-			}
-
-			pt = pt_next;
-		}
-
-		t += rv;
-	} while (rv > 0);
-
-	return t;  /* return total number of things done */
-}
-
-struct pollqueue * pollqueue_new(void)
-{
-	struct pollqueue *pq = malloc(sizeof(*pq));
-	if (!pq)
-		return NULL;
-	*pq = (struct pollqueue){
-		.head = NULL,
-		.tail = NULL
-	};
-	return pq;
-}
-
-void pollqueue_delete(struct pollqueue * pt)
-{
-	if (!pt)
-		return;
-	free(pt->a);
-	free(pt);
-}
-
+struct media_request;
 
 struct media_pool {
 	int fd;
+	sem_t sem;
+	pthread_mutex_t lock;
 	struct media_request * free_reqs;
-
 	struct pollqueue * pq;
 };
 
@@ -253,29 +63,30 @@ struct media_request {
 };
 
 
-static struct media_request * mq_get_free(struct media_pool * const mp)
+static inline int do_wait(sem_t *const sem)
 {
-	struct media_request *const req = mp->free_reqs;
-	if (req) {
-		mp->free_reqs = req->next;
-		req->next = NULL;
+	while (sem_wait(sem)) {
+		if (errno != EINTR)
+			return -errno;
 	}
-	return req;
-}
-
-static void mq_put_free(struct media_pool *const mp, struct media_request *const req)
-{
-	req->next = mp->free_reqs;
-	mp->free_reqs = req;
+	return 0;
 }
 
 struct media_request * media_request_get(struct media_pool * const mp)
 {
 	struct media_request *req = NULL;
-	int rv;
 
-	POLLQUEUE_WAIT(rv, mp->pq, (req = mq_get_free(mp)) != NULL);
+	/* Timeout handled by poll code */
+	if (do_wait(&mp->sem))
+		return NULL;
 
+	pthread_mutex_lock(&mp->lock);
+	req = mp->free_reqs;
+	if (req) {
+		mp->free_reqs = req->next;
+		req->next = NULL;
+	}
+	pthread_mutex_unlock(&mp->lock);
 	return req;
 }
 
@@ -297,19 +108,26 @@ int media_request_start(struct media_request * const req)
 		return -err;
 	}
 
-	pollqueue_add_task(mp->pq, req->pt);
+	pollqueue_add_task(mp->pq, req->pt, 2000);
 	return 0;
 }
 
 static void media_request_done(void *v, short revents)
 {
 	struct media_request *const req = v;
+	struct media_pool *const mp = req->mp;
+
+	/* ** Not sure what to do about timeout */
 
 	if (ioctl(req->fd, MEDIA_REQUEST_IOC_REINIT, NULL) < 0)
 		request_log("Unable to reinit media request: %s\n",
 			    strerror(errno));
 
-	mq_put_free(req->mp, req);
+	pthread_mutex_lock(&mp->lock);
+	req->next = mp->free_reqs;
+	mp->free_reqs = req;
+	pthread_mutex_unlock(&mp->lock);
+	sem_post(&mp->sem);
 }
 
 static void delete_req_chain(struct media_request * const chain)
@@ -335,6 +153,7 @@ struct media_pool * media_pool_new(const char * const media_path,
 		goto fail0;
 
 	mp->pq = pq;
+	pthread_mutex_init(&mp->lock, NULL);
 	mp->fd = open(media_path, O_RDWR | O_NONBLOCK);
 	if (mp->fd == -1) {
 		request_log("Failed to open '%s': %s\n", media_path, strerror(errno));
@@ -363,11 +182,14 @@ struct media_pool * media_pool_new(const char * const media_path,
 			goto fail4;
 	}
 
+	sem_init(&mp->sem, 0, n);
+
 	return mp;
 
 fail4:
 	delete_req_chain(mp->free_reqs);
 	close(mp->fd);
+	pthread_mutex_destroy(&mp->lock);
 fail1:
 	free(mp);
 fail0:
@@ -381,6 +203,8 @@ void media_pool_delete(struct media_pool * mp)
 
 	delete_req_chain(mp->free_reqs);
 	close(mp->fd);
+	sem_destroy(&mp->sem);
+	pthread_mutex_destroy(&mp->lock);
 	free(mp);
 }
 
@@ -398,14 +222,16 @@ enum qent_status {
 struct mediabuf_qent {
 	struct mediabuf_qent *next;
 	struct mediabuf_qent *prev;
-	struct pollqueue *pq;  /* Only valid whilst waiting */
 	enum qent_status status;
 	uint32_t index;
 	struct dmabuf_h *dh[VIDEO_MAX_PLANES];
 	struct timeval timestamp;
+	sem_t sem; /* Destination only */
 };
 
 struct buf_pool {
+	pthread_mutex_t lock;
+	sem_t free_sem;
 	enum v4l2_buf_type buf_type;
 	struct mediabuf_qent *free_head;
 	struct mediabuf_qent *free_tail;
@@ -420,6 +246,7 @@ void dmabuf_qent_delete(struct mediabuf_qent *const be)
 		return;
 	for (i = 0; i != VIDEO_MAX_PLANES; ++i)
 		dmabuf_free(be->dh[i]);
+	sem_destroy(&be->sem);
 	free(be);
 }
 
@@ -430,6 +257,7 @@ struct mediabuf_qent *dmabuf_qent_new()
 		.status = QENT_NEW,
 		.index  = INDEX_UNSET
 	};
+	sem_init(&be->sem, 0, 0);
 	return be;
 }
 
@@ -446,17 +274,18 @@ static void bq_put_free(struct buf_pool *const bp, struct mediabuf_qent * be)
 
 static struct mediabuf_qent * bq_get_free(struct buf_pool *const bp)
 {
-	struct mediabuf_qent *const be = bp->free_head;
-	if (!be)
-		return NULL;
+	struct mediabuf_qent *be;
 
-	if (be->next)
-		be->next->prev = be->prev;
-	else
-		bp->inuse_tail = be->prev;
-	bp->free_head = be->next;
-	be->next = NULL;
-	be->prev = NULL;
+	be = bp->free_head;
+	if (be) {
+		if (be->next)
+			be->next->prev = be->prev;
+		else
+			bp->inuse_tail = be->prev;
+		bp->free_head = be->next;
+		be->next = NULL;
+		be->prev = NULL;
+	}
 	return be;
 }
 
@@ -482,25 +311,31 @@ static void bq_free_all_free(struct buf_pool *const bp)
 		dmabuf_qent_delete(be);
 }
 
-void dmabuf_qent_put_free(struct buf_pool *const bp, struct mediabuf_qent *be)
+static void dmabuf_qent_put_free(struct buf_pool *const bp, struct mediabuf_qent *be)
 {
 	unsigned int i;
+
+	pthread_mutex_lock(&bp->lock);
 	/* Clear out state vars */
 	be->timestamp.tv_sec = 0;
 	be->timestamp.tv_usec = 0;
 	for (i = 0; i < VIDEO_MAX_PLANES && be->dh[i]; ++i)
 		dmabuf_len_set(be->dh[i], 0);
-
 	bq_put_free(bp, be);
+	pthread_mutex_unlock(&bp->lock);
+	sem_post(&bp->free_sem);
 }
 
-bool dmabuf_qent_is_inuse(const struct buf_pool *const bp)
+static bool dmabuf_qent_is_inuse(const struct buf_pool *const bp)
 {
 	return bp->inuse_tail != NULL;
 }
 
-void dmabuf_qent_put_inuse(struct buf_pool *const bp, struct mediabuf_qent *be)
+static void qent_put_inuse(struct buf_pool *const bp, struct mediabuf_qent *be)
 {
+	if (!be)
+		return;
+	pthread_mutex_lock(&bp->lock);
 	if (bp->inuse_tail)
 		bp->inuse_tail->next = be;
 	else
@@ -509,51 +344,73 @@ void dmabuf_qent_put_inuse(struct buf_pool *const bp, struct mediabuf_qent *be)
 	be->next = NULL;
 	bp->inuse_tail = be;
 	be->status = QENT_WAITING;
+	pthread_mutex_unlock(&bp->lock);
 }
 
 static struct mediabuf_qent *queue_get_free(struct buf_pool *const bp, struct pollqueue *const pq)
 {
-	struct mediabuf_qent *buf = NULL;
-	int rv;
+	struct mediabuf_qent *buf;
 
-	POLLQUEUE_WAIT(rv, pq, (buf = bq_get_free(bp)) != NULL);
-
+	if (do_wait(&bp->free_sem))
+		return NULL;
+	pthread_mutex_lock(&bp->lock);
+	buf = bq_get_free(bp);
+	pthread_mutex_unlock(&bp->lock);
 	return buf;
 }
 
-struct mediabuf_qent * dmabuf_queue_extract_fd(struct buf_pool *const bp, const int fd)
+static struct mediabuf_qent * queue_find_fd(struct buf_pool *const bp, const int fd)
 {
 	struct mediabuf_qent *be;
 
+	pthread_mutex_lock(&bp->lock);
 	/* Expect 1st in Q, but allow anywhere */
 	for (be = bp->inuse_head; be; be = be->next) {
 		if (dmabuf_fd(be->dh[0]) == fd)
-			return bq_extract_inuse(bp, be);
+			break;
 	}
-	return NULL;
+	pthread_mutex_unlock(&bp->lock);
+
+	return be;
 }
 
+static void queue_extract_inuse(struct buf_pool *const bp, struct mediabuf_qent *const be)
+{
+	if (!be)
+		return;
 
-void dmabuf_queue_delete(struct buf_pool *const bp)
+	pthread_mutex_lock(&bp->lock);
+	bq_extract_inuse(bp, be);
+	pthread_mutex_unlock(&bp->lock);
+}
+
+static void dmabuf_queue_delete(struct buf_pool *const bp)
 {
 	if (!bp)
 		return;
+	sem_destroy(&bp->free_sem);
+	pthread_mutex_destroy(&bp->lock);
 	free(bp);
 }
 
-struct buf_pool* dmabuf_queue_new(const int vfd, struct pollqueue * pq,
+static struct buf_pool* dmabuf_queue_new(const int vfd, struct pollqueue * pq,
 				  enum v4l2_buf_type buftype)
 {
 	struct buf_pool *bp = calloc(1, sizeof(*bp));
 	if (!bp)
 		return NULL;
+	pthread_mutex_init(&bp->lock, NULL);
+	sem_init(&bp->free_sem, 0, 0);
 	return bp;
 }
 
 
 struct mediabufs_ctl {
+	atomic_int ref_count;  /* 0 is single ref for easier atomics */
 	int vfd;
 	bool stream_on;
+	bool polling;
+	pthread_mutex_t lock;
 	struct buf_pool * src;
 	struct buf_pool * dst;
 	struct polltask * pt;
@@ -595,6 +452,8 @@ static int qent_v4l2_queue(struct mediabuf_qent *const be,
 		buffer.bytesused = dmabuf_len(be->dh[0]);
 		buffer.length = dmabuf_size(be->dh[0]);
 		buffer.m.fd = dmabuf_fd(be->dh[0]);
+
+		request_log("Q %s buf: fd=%d\n", is_dst ? "Dst" : "Src", buffer.m.fd);
 	}
 
 	if (!is_dst && mreq) {
@@ -644,9 +503,9 @@ static struct mediabuf_qent * qent_dequeue(struct buf_pool *const bp,
 	}
 
 	fd = mp ? planes[0].m.fd : buffer.m.fd;
-	be = dmabuf_queue_extract_fd(bp, fd);
+	be = queue_find_fd(bp, fd);
 	if (!be) {
-		request_log("Failed to find fd %d in src Q\n", fd);
+		request_log("Failed to find fd %d in Q\n", fd);
 		return NULL;
 	}
 
@@ -661,23 +520,41 @@ static bool mediabufs_wants_poll(const struct mediabufs_ctl *const mbc)
 
 static void rw_poll_cb(void * v, short revents)
 {
-	struct mediabufs_ctl *const mbc = v;
-	struct mediabuf_qent *be;
+	struct mediabufs_ctl *mbc = v;
+	struct mediabuf_qent *src_be = NULL;
+	struct mediabuf_qent *dst_be = NULL;
+	bool qrun = false;
 
-	if ((revents & POLLOUT) != 0) {
-		/* Got a src buffer - just recycle it */
-		be = qent_dequeue(mbc->src, mbc->vfd, mbc->src_fmt.type);
-		if (be)
-		       	dmabuf_qent_put_free(mbc->src, be);
-	}
-	if ((revents & POLLIN) != 0) {
-		/* Got a dst buffer - dequeue sets status */
-		qent_dequeue(mbc->dst, mbc->vfd, mbc->dst_fmt.type);
-	}
+	request_log("%s: revents=%#x\n", __func__, revents);
+
+	pthread_mutex_lock(&mbc->lock);
+	mbc->polling = false;
+
+	if (!revents)
+		request_log("%s: Timeout\n", __func__);
+
+	if ((revents & POLLOUT) != 0)
+		src_be = qent_dequeue(mbc->src, mbc->vfd, mbc->src_fmt.type);
+	if ((revents & POLLIN) != 0)
+		dst_be = qent_dequeue(mbc->dst, mbc->vfd, mbc->dst_fmt.type);
 
 	/* Reschedule */
-	if (mediabufs_wants_poll(mbc))
-		pollqueue_add_task(mbc->pq, mbc->pt);
+
+	queue_extract_inuse(mbc->src, src_be);
+	queue_extract_inuse(mbc->dst, dst_be);
+	if (!mbc->polling && mediabufs_wants_poll(mbc)) {
+		mbc->polling = true;
+		pollqueue_add_task(mbc->pq, mbc->pt, 2000);
+		qrun = true;
+	}
+	pthread_mutex_unlock(&mbc->lock);
+
+	if (src_be)
+		dmabuf_qent_put_free(mbc->src, src_be);
+	if (dst_be)
+		sem_post(&dst_be->sem);
+	if (!qrun)
+		mediabufs_ctl_unref(&mbc);
 }
 
 int qent_src_params_set(struct mediabuf_qent *const be, const struct timeval * timestamp)
@@ -714,28 +591,32 @@ VAStatus mediabufs_start_request(struct mediabufs_ctl *const mbc,
 			    struct mediabuf_qent *const dst_be,
 			    const bool is_final)
 {
-	const bool was_polling = mediabufs_wants_poll(mbc);
+	pthread_mutex_lock(&mbc->lock);
 
 	if (qent_v4l2_queue(src_be, mbc->vfd, mreq, &mbc->src_fmt, false, !is_final))
-		return VA_STATUS_ERROR_OPERATION_FAILED;
-	src_be->pq = mbc->pq;
-	dmabuf_qent_put_inuse(mbc->src, src_be);
+		goto fail1;
+	qent_put_inuse(mbc->src, src_be);
 
-	if (dst_be)
-	{
-		if (qent_v4l2_queue(dst_be, mbc->vfd, NULL, &mbc->dst_fmt, true, false))
-			return VA_STATUS_ERROR_OPERATION_FAILED;
-		dst_be->pq = mbc->pq;
-		dmabuf_qent_put_inuse(mbc->dst, dst_be);
+	if (dst_be &&
+	    qent_v4l2_queue(dst_be, mbc->vfd, NULL, &mbc->dst_fmt, true, false))
+		goto fail1;
+	qent_put_inuse(mbc->dst, dst_be);
+
+	if (!mbc->polling && mediabufs_wants_poll(mbc)) {
+		mbc->polling = true;
+		mediabufs_ctl_ref(mbc);
+		pollqueue_add_task(mbc->pq, mbc->pt, 2000);
 	}
-
-	if (!was_polling)
-		pollqueue_add_task(mbc->pq, mbc->pt);
+	pthread_mutex_unlock(&mbc->lock);
 
 	if (media_request_start(mreq))
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 
 	return VA_STATUS_SUCCESS;
+
+fail1:
+	pthread_mutex_unlock(&mbc->lock);
+	return VA_STATUS_ERROR_OPERATION_FAILED;
 }
 
 
@@ -838,11 +719,11 @@ static VAStatus find_fmt_flags(struct v4l2_format *const fmt,
 VAStatus qent_dst_wait(struct mediabuf_qent *const be)
 {
 	enum qent_status estat;
-	int rv;
 
-	POLLQUEUE_WAIT(rv, be->pq, be->status != QENT_WAITING);
-	be->pq = NULL;
-	if (rv < 0 || be->status == QENT_WAITING)
+	if (do_wait(&be->sem))
+		return VA_STATUS_ERROR_OPERATION_FAILED;
+
+	if (be->status == QENT_WAITING)
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 
 	estat = be->status;
@@ -987,7 +868,8 @@ VAStatus mediabufs_src_pool_create(struct mediabufs_ctl *const rw,
 			goto fail;
 		}
 		be->index = i;
-		bq_put_free(rw->src, be);
+
+		dmabuf_qent_put_free(rw->src, be);
 	}
 
 	return VA_STATUS_SUCCESS;
@@ -1013,6 +895,7 @@ fail:
 */
 VAStatus mediabufs_stream_on(struct mediabufs_ctl *const mbc)
 {
+	request_log("%s\n", __func__);
 	if (mbc->stream_on)
 		return VA_STATUS_SUCCESS;
 
@@ -1034,6 +917,7 @@ VAStatus mediabufs_stream_on(struct mediabufs_ctl *const mbc)
 VAStatus mediabufs_stream_off(struct mediabufs_ctl *const mbc)
 {
 	VAStatus status = VA_STATUS_SUCCESS;
+	request_log("%s\n", __func__);
 
 	if (!mbc->stream_on)
 		return VA_STATUS_SUCCESS;
@@ -1071,15 +955,14 @@ VAStatus mediabufs_src_fmt_set(struct mediabufs_ctl *const mbc,
 	return VA_STATUS_SUCCESS;
 }
 
-void mediabufs_ctl_delete(struct mediabufs_ctl **const pmbc)
+static void mediabufs_ctl_delete(struct mediabufs_ctl *const mbc)
 {
-	struct mediabufs_ctl *const mbc = *pmbc;
-
 	if (!mbc)
 		return;
-	*pmbc = NULL;
 
-	polltask_delete(mbc->pt);
+	request_log("%s\n", __func__);
+
+	polltask_delete(&mbc->pt);
 
 	mediabufs_stream_off(mbc);
 
@@ -1089,7 +972,30 @@ void mediabufs_ctl_delete(struct mediabufs_ctl **const pmbc)
 
 	dmabuf_queue_delete(mbc->dst);
 	dmabuf_queue_delete(mbc->src);
+	close(mbc->vfd);
+	pthread_mutex_destroy(&mbc->lock);
+
 	free(mbc);
+}
+
+void mediabufs_ctl_ref(struct mediabufs_ctl *const mbc)
+{
+	atomic_fetch_add(&mbc->ref_count, 1);
+}
+
+void mediabufs_ctl_unref(struct mediabufs_ctl **const pmbc)
+{
+	struct mediabufs_ctl *const mbc = *pmbc;
+	int n;
+
+	if (!mbc)
+		return;
+	*pmbc = NULL;
+	n = atomic_fetch_sub(&mbc->ref_count, 1);
+	request_log("%s: n=%d\n", __func__, n);
+	if (n)
+		return;
+	mediabufs_ctl_delete(mbc);
 }
 
 
@@ -1098,13 +1004,20 @@ struct mediabufs_ctl * mediabufs_ctl_new(const int vfd, struct pollqueue *const 
 {
 	struct mediabufs_ctl *const mbc = calloc(1, sizeof(*mbc));
 
-	mbc->src_fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-	mbc->dst_fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	mbc->vfd = vfd;
-	mbc->pq = pq;
-
 	if (!mbc)
 		return NULL;
+
+	request_log("%s\n", __func__);
+	mbc->src_fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+	mbc->dst_fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	mbc->pq = pq;
+	pthread_mutex_init(&mbc->lock, NULL);
+
+	/* ** Open really ** */
+	mbc->vfd = dup(vfd);
+	if (mbc->vfd == -1)
+		goto fail0;
+
 	mbc->src = dmabuf_queue_new(vfd, pq, mbc->src_fmt.type);
 	if (!mbc->src)
 		goto fail1;
@@ -1126,6 +1039,9 @@ fail3:
 fail2:
 	dmabuf_queue_delete(mbc->src);
 fail1:
+	close(mbc->vfd);
+fail0:
+	free(mbc);
 	request_log("%s: FAILED\n", __func__);
 	return NULL;
 }

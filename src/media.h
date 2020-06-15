@@ -26,17 +26,6 @@ e.h
 #define _MEDIA_H_
 
 struct pollqueue;
-struct polltask;
-
-struct polltask *polltask_new(const int fd, const short events,
-			      void (*fn)(void *v, short revents), void * v);
-void polltask_delete(struct polltask * pt);
-
-void pollqueue_add_task(struct pollqueue *const pq, struct polltask *const pt);
-int pollqueue_poll(struct pollqueue *const pq, uint64_t timeout_time);
-struct pollqueue * pollqueue_new(void);
-void pollqueue_delete(struct pollqueue * pq);
-
 struct media_request;
 struct media_pool;
 
@@ -86,7 +75,8 @@ VAStatus mediabufs_src_pool_create(struct mediabufs_ctl *const rw,
 			      struct dmabufs_ctrl * const dbsc,
 			      unsigned int n);
 struct mediabufs_ctl * mediabufs_ctl_new(const int vfd, struct pollqueue *const pq);
-void mediabufs_ctl_delete(struct mediabufs_ctl **const pmbc);
+void mediabufs_ctl_unref(struct mediabufs_ctl **const pmbc);
+void mediabufs_ctl_ref(struct mediabufs_ctl *const mbc);
 
 
 #endif

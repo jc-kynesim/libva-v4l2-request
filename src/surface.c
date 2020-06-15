@@ -48,19 +48,7 @@
 #include "v4l2.h"
 #include "video.h"
 #include "dmabufs.h"
-
-#if 0
-static const struct try_formats {
-	unsigned int va_rt;
-	unsigned int v4l2_fmt;
-} try_formats [] = {
-	{VA_RT_FORMAT_YUV420, V4L2_PIX_FMT_NV12_COL128},
-	{VA_RT_FORMAT_YUV420, V4L2_PIX_FMT_SUNXI_TILED_NV12},
-	{VA_RT_FORMAT_YUV420, V4L2_PIX_FMT_NV12},
-	{VA_RT_FORMAT_YUV420_10, V4L2_PIX_FMT_NV12_10_COL128},
-	{0, 0}
-};
-#endif
+#include "picture.h"
 
 VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 				unsigned int width, unsigned int height,
@@ -109,7 +97,6 @@ fail:
 	return VA_STATUS_ERROR_ALLOCATION_FAILED;
 }
 
-
 VAStatus surface_attach(struct object_surface *const os,
 			struct mediabufs_ctl *const mbc,
 			struct dmabufs_ctrl *const dbsc,
@@ -130,220 +117,6 @@ VAStatus surface_attach(struct object_surface *const os,
 	return VA_STATUS_SUCCESS;
 }
 
-#if 0
-VAStatus surface_alloc(VADriverContextP context, unsigned int format,
-				unsigned int width, unsigned int height,
-				VASurfaceID *surfaces_ids,
-				unsigned int surfaces_count,
-				VASurfaceAttrib *attributes,
-				unsigned int attributes_count)
-{
-	struct request_data *driver_data = context->pDriverData;
-	struct object_surface *surface_object;
-	struct video_format *video_format = NULL;
-	unsigned int destination_sizes[VIDEO_MAX_PLANES];
-	unsigned int destination_bytesperlines[VIDEO_MAX_PLANES];
-	unsigned int destination_planes_count;
-	unsigned int format_width, format_height;
-	unsigned int capture_type;
-	unsigned int index_base;
-	unsigned int index;
-	unsigned int i, j;
-	struct picdesc pds;
-	struct picdesc *const pd = &pds;
-	VASurfaceID id;
-	bool found;
-	int rc;
-
-	request_log("%s: %dx%d\n", __func__, width, height);
-//	if (format != VA_RT_FORMAT_YUV420)
-//		return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
-
-        if (!driver_data->video_format) {
-		found = false;
-		video_format = NULL;
-		for (i = 0; try_formats[i].va_rt != 0; ++i) {
-			if (try_formats[i].va_rt != format)
-				continue;
-			found = true;
-
-			if (v4l2_find_format(driver_data->video_fd,
-					     V4L2_BUF_TYPE_VIDEO_CAPTURE,
-					     try_formats[i].v4l2_fmt))
-			{
-				video_format = video_format_find(try_formats[i].v4l2_fmt);
-				break;
-			}
-		}
-
-		if (!found)
-			return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
-
-		if (video_format == NULL)
-			return VA_STATUS_ERROR_OPERATION_FAILED;
-
-		driver_data->video_format = video_format;
-
-		capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
-
-		rc = v4l2_set_format(driver_data->video_fd, capture_type,
-				     video_format->v4l2_format, width, height);
-		if (rc < 0)
-			return VA_STATUS_ERROR_OPERATION_FAILED;
-        } else {
-		video_format = driver_data->video_format;
-		capture_type = v4l2_type_video_capture(video_format->v4l2_mplane);
-	}
-
-	rc = v4l2_try_picdesc(pd, driver_data->video_fd, capture_type, width, height, video_format->v4l2_format);
-	request_log("PD: %dx%d -> rc=%d %dx%d*%d size=%zd\n", pd->req_width, pd->req_height,
-		    rc, pd->planes[0].width, pd->planes[0].height, pd->plane_count, pd->bufs[0].size);
-
-	rc = v4l2_get_format(driver_data->video_fd, capture_type, &format_width,
-			     &format_height, destination_bytesperlines,
-			     destination_sizes, NULL);
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
-
-	destination_planes_count = video_format->planes_count;
-
-	rc = v4l2_create_buffers(driver_data->video_fd, capture_type,
-				 V4L2_MEMORY_DMABUF,
-				 surfaces_count, &index_base);
-	if (rc < 0)
-		return VA_STATUS_ERROR_ALLOCATION_FAILED;
-
-	for (i = 0; i < surfaces_count; i++) {
-		index = index_base + i;
-
-		id = object_heap_allocate(&driver_data->surface_heap);
-		surface_object = SURFACE(driver_data, id);
-		if (surface_object == NULL)
-			return VA_STATUS_ERROR_ALLOCATION_FAILED;
-
-		rc = v4l2_query_buffer(driver_data->video_fd, capture_type,
-				       index,
-				       surface_object->destination_map_lengths,
-				       surface_object->destination_map_offsets,
-				       video_format->v4l2_buffers_count);
-		if (rc < 0)
-			return VA_STATUS_ERROR_ALLOCATION_FAILED;
-
-		for (j = 0; j < video_format->v4l2_buffers_count; j++) {
-			surface_object->destination_dh[j] = dmabuf_alloc(driver_data->dmabufs_ctrl, pd->bufs[j].size);
-			if (!surface_object->destination_dh[j]) {
-				request_log("Failed dest surface alloc\n");
-				return VA_STATUS_ERROR_ALLOCATION_FAILED;
-			}
-
-			surface_object->destination_map[j] =
-				dmabuf_map(surface_object->destination_dh[j]);
-			if (!surface_object->destination_map[j])
-				return VA_STATUS_ERROR_ALLOCATION_FAILED;
-		}
-
-		/*
-		 * FIXME: Handle this per-pixelformat, trying to generalize it
-		 * is not a reasonable approach. The final description should be
-		 * in terms of (logical) planes.
-		 */
-
-		if (video_format->v4l2_buffers_count == 1) {
-			switch (video_format->v4l2_format) {
-			case V4L2_PIX_FMT_NV12_COL128:
-				/* modifiers are per buffer so only 1 needed */
-				surface_object->destination_modifiers[0] = DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT(destination_bytesperlines[0]);
-				/*
-				 * What do we actually mean by plane size here?
-				 * A plausible argument could be made for {<total_size>, 0}
-				 * But it is probaly best to fake up something with a
-				 * geometry that looks like a 'normal' NV12 layout
-				 */
-				surface_object->destination_sizes[0] = format_width * format_height;
-				surface_object->destination_sizes[1] = destination_sizes[0] - surface_object->destination_sizes[0];
-				surface_object->destination_offsets[0] = 0;
-				surface_object->destination_offsets[1] = format_height * 128;
-				surface_object->destination_data[0] = (unsigned char *)surface_object->destination_map[0];
-				surface_object->destination_data[1] = surface_object->destination_data[0] + surface_object->destination_offsets[1];
-				/* To work around assertions in some code make bytesperline >= width */
-				surface_object->destination_bytesperlines[0] = format_width;
-				surface_object->destination_bytesperlines[1] = format_width;
-				break;
-			case V4L2_PIX_FMT_NV12_10_COL128:
-				surface_object->destination_modifiers[0] = DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT(destination_bytesperlines[0]);
-				surface_object->destination_sizes[0] = format_width * format_height * 4 / 3;
-				surface_object->destination_sizes[1] = destination_sizes[0] - surface_object->destination_sizes[0];
-				surface_object->destination_offsets[0] = 0;
-				surface_object->destination_offsets[1] = format_height * 128;
-				surface_object->destination_data[0] = (unsigned char *)surface_object->destination_map[0];
-				surface_object->destination_data[1] = surface_object->destination_data[0] + surface_object->destination_offsets[1];
-				surface_object->destination_bytesperlines[0] = format_width * 4 / 3;
-				surface_object->destination_bytesperlines[1] = format_width * 4 / 3;
-				break;
-			default:
-				surface_object->destination_modifiers[0] =
-					video_format->drm_modifier;
-
-				destination_sizes[0] = destination_bytesperlines[0] *
-						       format_height;
-
-				for (j = 1; j < destination_planes_count; j++)
-					destination_sizes[j] = destination_sizes[0] / 2;
-
-				for (j = 0; j < destination_planes_count; j++) {
-					surface_object->destination_offsets[j] =
-						j > 0 ? destination_sizes[j - 1] : 0;
-					surface_object->destination_data[j] =
-						((unsigned char *)surface_object->destination_map[0] +
-						 surface_object->destination_offsets[j]);
-					surface_object->destination_sizes[j] =
-						destination_sizes[j];
-					surface_object->destination_bytesperlines[j] =
-						destination_bytesperlines[0];
-				}
-				break;
-			}
-		} else if (video_format->v4l2_buffers_count == destination_planes_count) {
-			for (j = 0; j < destination_planes_count; j++) {
-				surface_object->destination_modifiers[j] =
-					video_format->drm_modifier;
-				surface_object->destination_offsets[j] = 0;
-				surface_object->destination_data[j] =
-					surface_object->destination_map[j];
-				surface_object->destination_sizes[j] =
-					destination_sizes[j];
-				surface_object->destination_bytesperlines[j] =
-					destination_bytesperlines[j];
-			}
-		} else {
-			return VA_STATUS_ERROR_ALLOCATION_FAILED;
-		}
-
-		surface_object->status = VASurfaceReady;
-
-		surface_object->source_index = 0;
-		surface_object->source_data = NULL;
-		surface_object->source_size = 0;
-
-		surface_object->destination_index = index;
-
-		surface_object->destination_planes_count =
-			destination_planes_count;
-		surface_object->destination_buffers_count =
-			video_format->v4l2_buffers_count;
-
-		memset(&surface_object->params, 0,
-		       sizeof(surface_object->params));
-		surface_object->slices_count = 0;
-		surface_object->slices_size = 0;
-
-		surfaces_ids[i] = id;
-	}
-
-	return VA_STATUS_SUCCESS;
-}
-#endif
-
 VAStatus RequestCreateSurfaces(VADriverContextP context, int width, int height,
 			       int format, int surfaces_count,
 			       VASurfaceID *surfaces_ids)
@@ -356,20 +129,19 @@ VAStatus RequestDestroySurfaces(VADriverContextP context,
 				VASurfaceID *surfaces_ids, int surfaces_count)
 {
 	struct request_data *driver_data = context->pDriverData;
-	struct object_surface *surface_object;
+	struct object_surface *surf;
 	unsigned int i;
 
 	for (i = 0; i < surfaces_count; i++) {
-		request_log("%s[%d/%d]: id=%#x\n", __func__, i, surfaces_count, surfaces_ids[i]);
-
-		surface_object = SURFACE(driver_data, surfaces_ids[i]);
-		if (surface_object == NULL)
+		surf = SURFACE(driver_data, surfaces_ids[i]);
+		if (surf == NULL)
 			return VA_STATUS_ERROR_INVALID_SURFACE;
 
-		qent_dst_delete(surface_object->qent);
+		qent_dst_delete(surf->qent);
+		bit_stash_delete(surf->bit_stash);
 
 		object_heap_free(&driver_data->surface_heap,
-				 (struct object_base *)surface_object);
+				 (struct object_base *)surf);
 	}
 
 	return VA_STATUS_SUCCESS;

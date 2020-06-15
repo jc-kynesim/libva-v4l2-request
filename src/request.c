@@ -37,6 +37,7 @@
 #include <va/va_backend.h>
 
 #include "dmabufs.h"
+#include "pollqueue.h"
 #include "request.h"
 #include "utils.h"
 #include "v4l2.h"

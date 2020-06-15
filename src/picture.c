@@ -72,7 +72,7 @@ struct bit_stash {
 	uint8_t * data;
 };
 
-static void bit_stash_delete(struct bit_stash *const bs)
+void bit_stash_delete(struct bit_stash *const bs)
 {
 	if (!bs)
 		return;
@@ -115,13 +115,6 @@ static size_t bit_block_len(const struct bit_stash *const bs,
 {
 	return n >= bs->block_len ? 0 : bs->blocks[n].len;
 }
-
-static bool bit_block_last(const struct bit_stash *const bs,
-	       		   const unsigned int n)
-{
-	return n >= bs->block_len || bs->blocks[n].render_last;
-}
-
 
 static unsigned int sizebits(size_t x)
 {
@@ -401,12 +394,13 @@ static VAStatus flush_data(struct request_data *driver_data,
 		request_log("mediabufs_start_request failed\n");
 		return rc;
 	}
-
+#if 0
 	rc = queue_await_completion(driver_data, surf, is_last);
 	if (rc != VA_STATUS_SUCCESS) {
 		request_log("queue_await_completion failed\n");
 		return rc;
 	}
+#endif
 	return VA_STATUS_SUCCESS;
 }
 
@@ -545,7 +539,6 @@ VAStatus RequestEndPicture(VADriverContextP context, VAContextID context_id)
 	VAStatus rv;
 	unsigned int n;
 	unsigned int i;
-	bool first_decode = true;
 	struct mediabuf_qent *src_qent = NULL;
 
 	ctx = CONTEXT(driver_data, context_id);

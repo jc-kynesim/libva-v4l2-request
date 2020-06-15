@@ -132,6 +132,8 @@ VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 
 	*context_id = id;
 
+	request_log("%s: id=%#x\n", __func__, id);
+
 	status = VA_STATUS_SUCCESS;
 	goto complete;
 
@@ -144,21 +146,26 @@ complete:
 	return status;
 }
 
-VAStatus RequestDestroyContext(VADriverContextP context, VAContextID context_id)
+VAStatus RequestDestroyContext(VADriverContextP vdc, VAContextID context_id)
 {
-	struct request_data *driver_data = context->pDriverData;
-	struct object_context *context_object;
+	struct request_data *driver_data = vdc->pDriverData;
+	struct object_context *ctx;
+	unsigned int i;
 
-	context_object = CONTEXT(driver_data, context_id);
-	if (context_object == NULL)
+	request_log("%s: id=%#x\n", __func__, context_id);
+
+	ctx = CONTEXT(driver_data, context_id);
+	if (ctx == NULL)
 		return VA_STATUS_ERROR_INVALID_CONTEXT;
 
-	free(context_object->surfaces_ids);
+	for (i = 0; i != ctx->surfaces_count; ++i)
+		RequestSyncSurface(vdc, ctx->surfaces_ids[i]);
 
-	mediabufs_ctl_delete(&context_object->mbc);
+	free(ctx->surfaces_ids);
 
-	object_heap_free(&driver_data->context_heap,
-			 (struct object_base *)context_object);
+	mediabufs_ctl_unref(&ctx->mbc);
+
+	object_heap_free(&driver_data->context_heap, &ctx->base);
 
 	return VA_STATUS_SUCCESS;
 }

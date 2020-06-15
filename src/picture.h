@@ -37,4 +37,7 @@ VAStatus RequestRenderPicture(VADriverContextP context, VAContextID context_id,
 			      VABufferID *buffers, int buffers_count);
 VAStatus RequestEndPicture(VADriverContextP context, VAContextID context_id);
 
+struct bit_stash;
+void bit_stash_delete(struct bit_stash *const bs);
+
 #endif
