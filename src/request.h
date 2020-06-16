@@ -60,9 +60,10 @@ struct request_data {
 
 	int video_fd;
 
-	struct pollqueue * pollqueue;
-	struct media_pool * media_pool;
-	struct dmabufs_ctrl * dmabufs_ctrl;
+	struct devscan *scan;
+	struct pollqueue *pollqueue;
+	struct media_pool *media_pool;
+	struct dmabufs_ctrl *dmabufs_ctrl;
 };
 
 VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP context);

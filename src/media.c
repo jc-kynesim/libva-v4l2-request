@@ -525,13 +525,11 @@ static void rw_poll_cb(void * v, short revents)
 	struct mediabuf_qent *dst_be = NULL;
 	bool qrun = false;
 
-	request_log("%s: revents=%#x\n", __func__, revents);
+	if (!revents)
+		request_log("%s: Timeout\n", __func__);
 
 	pthread_mutex_lock(&mbc->lock);
 	mbc->polling = false;
-
-	if (!revents)
-		request_log("%s: Timeout\n", __func__);
 
 	if ((revents & POLLOUT) != 0)
 		src_be = qent_dequeue(mbc->src, mbc->vfd, mbc->src_fmt.type);

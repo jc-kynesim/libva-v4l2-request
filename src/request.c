@@ -27,6 +27,7 @@
 #include "buffer.h"
 #include "config.h"
 #include "context.h"
+#include "devscan.h"
 #include "image.h"
 #include "picture.h"
 #include "subpicture.h"
@@ -56,31 +57,33 @@
 
 #include <linux/videodev2.h>
 
+
 /* Set default visibility for the init function only. */
 VAStatus __attribute__((visibility("default")))
 VA_DRIVER_INIT_FUNC(VADriverContextP context);
 
-VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP context)
+VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP dc)
 {
-	struct request_data *driver_data;
-	struct VADriverVTable *vtable = context->vtable;
+	struct request_data *dd;
+	struct VADriverVTable *vtable = dc->vtable;
 	VAStatus status;
 	unsigned int capabilities;
 	unsigned int capabilities_required;
 	int video_fd = -1;
-	char *video_path;
-	char *media_path;
+	const char *video_path;
+	const char *media_path;
+	const struct decdev * decdev;
 	int rc;
 
-	context->version_major = VA_MAJOR_VERSION;
-	context->version_minor = VA_MINOR_VERSION;
-	context->max_profiles = V4L2_REQUEST_MAX_PROFILES;
-	context->max_entrypoints = V4L2_REQUEST_MAX_ENTRYPOINTS;
-	context->max_attributes = V4L2_REQUEST_MAX_CONFIG_ATTRIBUTES;
-	context->max_image_formats = V4L2_REQUEST_MAX_IMAGE_FORMATS;
-	context->max_subpic_formats = V4L2_REQUEST_MAX_SUBPIC_FORMATS;
-	context->max_display_attributes = V4L2_REQUEST_MAX_DISPLAY_ATTRIBUTES;
-	context->str_vendor = V4L2_REQUEST_STR_VENDOR;
+	dc->version_major = VA_MAJOR_VERSION;
+	dc->version_minor = VA_MINOR_VERSION;
+	dc->max_profiles = V4L2_REQUEST_MAX_PROFILES;
+	dc->max_entrypoints = V4L2_REQUEST_MAX_ENTRYPOINTS;
+	dc->max_attributes = V4L2_REQUEST_MAX_CONFIG_ATTRIBUTES;
+	dc->max_image_formats = V4L2_REQUEST_MAX_IMAGE_FORMATS;
+	dc->max_subpic_formats = V4L2_REQUEST_MAX_SUBPIC_FORMATS;
+	dc->max_display_attributes = V4L2_REQUEST_MAX_DISPLAY_ATTRIBUTES;
+	dc->str_vendor = V4L2_REQUEST_STR_VENDOR;
 
 	vtable->vaTerminate = RequestTerminate;
 	vtable->vaQueryConfigEntrypoints = RequestQueryConfigEntrypoints;
@@ -132,32 +135,42 @@ VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP context)
 	vtable->vaLockSurface = RequestLockSurface;
 	vtable->vaUnlockSurface = RequestUnlockSurface;
 
-	driver_data = malloc(sizeof(*driver_data));
-	memset(driver_data, 0, sizeof(*driver_data));
+	dd = calloc(1, sizeof(*dd));
+	if (!dd)
+		return VA_STATUS_ERROR_ALLOCATION_FAILED;
 
-	context->pDriverData = driver_data;
+	dc->pDriverData = dd;
 
-	object_heap_init(&driver_data->config_heap,
+	object_heap_init(&dd->config_heap,
 			 sizeof(struct object_config), CONFIG_ID_OFFSET);
-	object_heap_init(&driver_data->context_heap,
+	object_heap_init(&dd->context_heap,
 			 sizeof(struct object_context), CONTEXT_ID_OFFSET);
-	object_heap_init(&driver_data->surface_heap,
+	object_heap_init(&dd->surface_heap,
 			 sizeof(struct object_surface), SURFACE_ID_OFFSET);
-	object_heap_init(&driver_data->buffer_heap,
+	object_heap_init(&dd->buffer_heap,
 			 sizeof(struct object_buffer), BUFFER_ID_OFFSET);
-	object_heap_init(&driver_data->image_heap, sizeof(struct object_image),
+	object_heap_init(&dd->image_heap, sizeof(struct object_image),
 			 IMAGE_ID_OFFSET);
 
-	video_path = getenv("LIBVA_V4L2_REQUEST_VIDEO_PATH");
-	if (video_path == NULL)
-		video_path = "/dev/video0";
-
 	request_log("<<< %s\n", __func__);
+
+	status = devscan_build(dc, &dd->scan);
+	if (status != VA_STATUS_SUCCESS)
+		goto error;
+
+	decdev = devscan_find(dd->scan, 0);
+	if (!decdev) {
+		request_err(dc, "Failed to find any usable V4L2 request devices");
+		goto error;
+	}
+
+	video_path = decdev_video_path(decdev);
+	media_path = decdev_media_path(decdev);
 
 //	video_fd = open(video_path, O_RDWR | O_NONBLOCK);
 	video_fd = open(video_path, O_RDWR);
 	if (video_fd < 0) {
-		request_log("Failed to open '%s': %s\n", video_path, strerror(errno));
+		request_err(dc, "Failed to open '%s': %s\n", video_path, strerror(errno));
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 	}
 
@@ -170,31 +183,28 @@ VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP context)
 	capabilities_required = V4L2_CAP_STREAMING;
 
 	if ((capabilities & capabilities_required) != capabilities_required) {
-		request_log("Missing required driver capabilities\n");
+		request_err(dc, "Missing required driver capabilities\n");
 		status = VA_STATUS_ERROR_OPERATION_FAILED;
 		goto error;
 	}
 
-	driver_data->pollqueue = pollqueue_new();
-	if (!driver_data->pollqueue) {
-		request_log("Failed to create pollqueue\n");
+	dd->pollqueue = pollqueue_new();
+	if (!dd->pollqueue) {
+		request_err(dc, "Failed to create pollqueue\n");
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 	}
 
-	media_path = getenv("LIBVA_V4L2_REQUEST_MEDIA_PATH");
-	if (media_path == NULL)
-		media_path = "/dev/media0";
-	driver_data->video_fd = video_fd;
+	dd->video_fd = video_fd;
 
-	driver_data->media_pool = media_pool_new(media_path, driver_data->pollqueue, 4);
-	if (!driver_data->media_pool) {
-		request_log("Failed to create media pool for '%s'\n", media_path);
+	dd->media_pool = media_pool_new(media_path, dd->pollqueue, 4);
+	if (!dd->media_pool) {
+		request_err(dc, "Failed to create media pool for '%s'\n", media_path);
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 	}
 
-	driver_data->dmabufs_ctrl = dmabufs_ctrl_new();
-	if (!driver_data->dmabufs_ctrl) {
-		request_log("Failed to get dmabufs\n");
+	dd->dmabufs_ctrl = dmabufs_ctrl_new();
+	if (!dd->dmabufs_ctrl) {
+		request_err(dc, "Failed to get dmabufs\n");
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 	}
 
@@ -287,3 +297,13 @@ VAStatus RequestTerminate(VADriverContextP context)
 
 	return VA_STATUS_SUCCESS;
 }
+
+
+
+
+//------------------------------------------------------------------------------
+
+
+
+
+

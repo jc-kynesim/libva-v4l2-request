@@ -26,10 +26,23 @@
 #ifndef _UTILS_H_
 #define _UTILS_H_
 
+#include <stdarg.h>
+#include "va/va_backend.h"
+
 #define STRING(x) _STRING2(x)
 #define _STRING2(x) #x
 
-#define request_log(...)  _request_log(__FILE__ ":" STRING(__LINE__) ": " __VA_ARGS__)
+#define request_log(...)\
+	_request_log(__FILE__ ":" STRING(__LINE__) ": " __VA_ARGS__)
+#define request_info(_dc, ...)\
+	_request_info(_dc, __VA_ARGS__)
+#define request_err(_dc, ...)\
+	_request_err(_dc, __VA_ARGS__)
+
+/* Just stderr - just use for debug */
 void _request_log(const char *format, ...);
+/* VA reporting channels */
+void _request_err(const VADriverContextP dc, const char *fmt, ...);
+void _request_info(const VADriverContextP dc, const char *fmt, ...);
 
 #endif

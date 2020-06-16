@@ -40,3 +40,29 @@ void _request_log(const char *format, ...)
 	vfprintf(stderr, format, arguments);
 	va_end(arguments);
 }
+
+void _request_err(const VADriverContextP dc, const char *fmt, ...)
+{
+	va_list args;
+	char buf[256];
+
+	va_start(args, fmt);
+	vsnprintf(buf, sizeof(buf), fmt, args);
+	va_end(args);
+
+	dc->error_callback(dc, buf);
+}
+
+void _request_info(const VADriverContextP dc, const char *fmt, ...)
+{
+	va_list args;
+	char buf[256];
+
+	va_start(args, fmt);
+	vsnprintf(buf, sizeof(buf), fmt, args);
+	va_end(args);
+
+	dc->info_callback(dc, buf);
+}
+
+

@@ -28,25 +28,26 @@ autoconf = configure_file(
 	configuration: autoconf_data)
 
 sources = [
-	'request.c',
-	'object_heap.c',
-	'config.c',
-	'surface.c',
-	'context.c',
 	'buffer.c',
+	'config.c',
+	'context.c',
 	'dmabufs.c',
-	'picture.c',
-	'subpicture.c',
-	'image.c',
-	'pollqueue.c',
-	'utils.c',
-	'tiled_yuv.S',
-	'video.c',
-	'media.c',
-	'v4l2.c',
-	'mpeg2.c',
+	'devscan.c',
 	'h264.c',
-	'h265.c'
+	'h265.c',
+	'image.c',
+	'media.c',
+	'mpeg2.c',
+	'object_heap.c',
+	'picture.c',
+	'pollqueue.c',
+	'request.c',
+	'surface.c',
+	'subpicture.c',
+	'tiled_yuv.S',
+	'utils.c',
+	'v4l2.c',
+	'video.c'
 ]
 
 headers = [
@@ -57,6 +58,7 @@ headers = [
 	'context.h',
 	'buffer.h',
 	'dmabufs.h',
+	'devscan.h',
 	'picture.h',
 	'subpicture.h',
 	'image.h',
