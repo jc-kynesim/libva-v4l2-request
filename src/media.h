@@ -68,13 +68,18 @@ VAStatus mediabufs_dst_fmt_set(struct mediabufs_ctl *const mbc,
 			   const unsigned int width,
 			   const unsigned int height);
 struct mediabuf_qent *mediabufs_src_qent_get(struct mediabufs_ctl *const mbc);
+VAStatus mediabufs_set_ext_ctrl(struct mediabufs_ctl *const mbc,
+				struct media_request * const mreq,
+				unsigned int id, void *data,
+				unsigned int size);
 VAStatus mediabufs_src_fmt_set(struct mediabufs_ctl *const mbc,
 			       const uint32_t pixfmt,
 			       const uint32_t width, const uint32_t height);
 VAStatus mediabufs_src_pool_create(struct mediabufs_ctl *const rw,
 			      struct dmabufs_ctrl * const dbsc,
 			      unsigned int n);
-struct mediabufs_ctl * mediabufs_ctl_new(const int vfd, struct pollqueue *const pq);
+struct mediabufs_ctl * mediabufs_ctl_new(const VADriverContextP dc,
+					 const char *vpath, struct pollqueue *const pq);
 void mediabufs_ctl_unref(struct mediabufs_ctl **const pmbc);
 void mediabufs_ctl_ref(struct mediabufs_ctl *const mbc);
 

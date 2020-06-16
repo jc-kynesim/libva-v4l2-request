@@ -405,8 +405,8 @@ static void h264_va_slice_to_v4l2(struct request_data *driver_data,
 				     VASlice->chroma_offset_l1);
 }
 
-int h264_set_controls(struct request_data *driver_data,
-		      struct object_context *context,
+VAStatus h264_set_controls(struct request_data *driver_data,
+		      struct object_context *ctx,
 		      struct media_request * const mreq,
 		      struct object_surface *surface)
 {
@@ -418,53 +418,53 @@ int h264_set_controls(struct request_data *driver_data,
 	struct h264_dpb_entry *output;
 	int rc;
 
-	output = dpb_lookup(context, &surface->params.h264.picture.CurrPic,
+	output = dpb_lookup(ctx, &surface->params.h264.picture.CurrPic,
 			    NULL);
 	if (!output)
-		output = dpb_find_entry(context);
+		output = dpb_find_entry(ctx);
 
 	dpb_clear_entry(output, true);
 
-	dpb_update(context, &surface->params.h264.picture);
+	dpb_update(ctx, &surface->params.h264.picture);
 
-	h264_va_picture_to_v4l2(driver_data, context, surface,
+	h264_va_picture_to_v4l2(driver_data, ctx, surface,
 				&surface->params.h264.picture,
 				&decode, &pps, &sps);
-	h264_va_matrix_to_v4l2(driver_data, context,
+	h264_va_matrix_to_v4l2(driver_data, ctx,
 			       &surface->params.h264.matrix, &matrix);
-	h264_va_slice_to_v4l2(driver_data, context,
+	h264_va_slice_to_v4l2(driver_data, ctx,
 			      &surface->params.h264.slice,
 			      &surface->params.h264.picture, &slice);
 
-	rc = v4l2_set_control(driver_data->video_fd, mreq,
+	rc = mediabufs_set_ext_ctrl(ctx->mbc, mreq,
 			      V4L2_CID_MPEG_VIDEO_H264_DECODE_PARAMS, &decode,
 			      sizeof(decode));
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
+	if (rc != VA_STATUS_SUCCESS)
+		return rc;
 
-	rc = v4l2_set_control(driver_data->video_fd, mreq,
+	rc = mediabufs_set_ext_ctrl(ctx->mbc, mreq,
 			      V4L2_CID_MPEG_VIDEO_H264_SLICE_PARAMS, &slice,
 			      sizeof(slice));
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
+	if (rc != VA_STATUS_SUCCESS)
+		return rc;
 
-	rc = v4l2_set_control(driver_data->video_fd, mreq,
+	rc = mediabufs_set_ext_ctrl(ctx->mbc, mreq,
 			      V4L2_CID_MPEG_VIDEO_H264_PPS, &pps, sizeof(pps));
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
+	if (rc != VA_STATUS_SUCCESS)
+		return rc;
 
-	rc = v4l2_set_control(driver_data->video_fd, mreq,
+	rc = mediabufs_set_ext_ctrl(ctx->mbc, mreq,
 			      V4L2_CID_MPEG_VIDEO_H264_SPS, &sps, sizeof(sps));
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
+	if (rc != VA_STATUS_SUCCESS)
+		return rc;
 
-	rc = v4l2_set_control(driver_data->video_fd, mreq,
+	rc = mediabufs_set_ext_ctrl(ctx->mbc, mreq,
 			      V4L2_CID_MPEG_VIDEO_H264_SCALING_MATRIX, &matrix,
 			      sizeof(matrix));
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
+	if (rc != VA_STATUS_SUCCESS)
+		return rc;
 
-	dpb_insert(context, &surface->params.h264.picture.CurrPic, output);
+	dpb_insert(ctx, &surface->params.h264.picture.CurrPic, output);
 
 	return VA_STATUS_SUCCESS;
 }

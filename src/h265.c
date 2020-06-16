@@ -390,8 +390,8 @@ static void h265_fill_scaling_matrix(const VAIQMatrixBufferHEVC * src,
 	memcpy(dst->scaling_list_dc_coef_32x32, src->ScalingListDC32x32, sizeof(dst->scaling_list_dc_coef_32x32));
 }
 
-int h265_set_controls(struct request_data *driver_data,
-		      struct object_context *context_object,
+VAStatus h265_set_controls(struct request_data *driver_data,
+		      struct object_context *ctx,
 		      struct media_request * const mreq,
 		      struct object_surface *surface_object)
 {
@@ -410,17 +410,17 @@ int h265_set_controls(struct request_data *driver_data,
 
 	h265_fill_pps(picture, slice, &pps);
 
-	rc = v4l2_set_control(driver_data->video_fd, mreq,
+	rc = mediabufs_set_ext_ctrl(ctx->mbc, mreq,
 			      V4L2_CID_MPEG_VIDEO_HEVC_PPS, &pps, sizeof(pps));
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
+	if (rc != VA_STATUS_SUCCESS)
+		return rc;
 
 	h265_fill_sps(picture, &sps);
 
-	rc = v4l2_set_control(driver_data->video_fd, mreq,
+	rc = mediabufs_set_ext_ctrl(ctx->mbc, mreq,
 			      V4L2_CID_MPEG_VIDEO_HEVC_SPS, &sps, sizeof(sps));
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
+	if (rc != VA_STATUS_SUCCESS)
+		return rc;
 
 	/* If not setting on a request then just set SPS/PPS
 	 * as this is pre-decode setup
@@ -431,22 +431,21 @@ int h265_set_controls(struct request_data *driver_data,
 	h265_fill_slice_params(picture, slice, &driver_data->surface_heap,
 			       surface_object->source_data, &slice_params);
 
-	rc = v4l2_set_control(driver_data->video_fd, mreq,
+	rc = mediabufs_set_ext_ctrl(ctx->mbc, mreq,
 			      V4L2_CID_MPEG_VIDEO_HEVC_SLICE_PARAMS,
 			      &slice_params, sizeof(slice_params));
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
+	if (rc != VA_STATUS_SUCCESS)
+		return rc;
 
 	memset(&scaling_matrix, 0, sizeof(scaling_matrix));
 	if (iqmatrix_set)
 		h265_fill_scaling_matrix(iqmatrix, &scaling_matrix);
 
-	rc = v4l2_set_control(driver_data->video_fd, mreq,
+	rc = mediabufs_set_ext_ctrl(ctx->mbc, mreq,
 			      V4L2_CID_MPEG_VIDEO_HEVC_SCALING_MATRIX,
 			      &scaling_matrix, sizeof(scaling_matrix));
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
-
+	if (rc != VA_STATUS_SUCCESS)
+		return rc;
 
 	return VA_STATUS_SUCCESS;
 }

@@ -26,6 +26,7 @@
 
 #include "context.h"
 #include "config.h"
+#include "devscan.h"
 #include "request.h"
 #include "surface.h"
 
@@ -74,17 +75,18 @@ static uint32_t vaprofile_to_pixfmt(const VAProfile profile)
 	return 0;
 }
 
-VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
+VAStatus RequestCreateContext(VADriverContextP dc, VAConfigID config_id,
 			      int picture_width, int picture_height, int flags,
 			      VASurfaceID *surfaces_ids, int surfaces_count,
 			      VAContextID *context_id)
 {
-	struct request_data *driver_data = context->pDriverData;
+	struct request_data *driver_data = dc->pDriverData;
 	struct object_config *config_object;
 	struct object_context *context_object = NULL;
 	VAContextID id;
 	VAStatus status;
 	unsigned int pixelformat;
+	const struct decdev *ddev;
 
 	config_object = CONFIG(driver_data, config_id);
 	if (config_object == NULL) {
@@ -106,8 +108,14 @@ VAStatus RequestCreateContext(VADriverContextP context, VAConfigID config_id,
 		goto error;
 	}
 
-	context_object->vfd = driver_data->video_fd; /*** Actually open it here */
-	context_object->mbc = mediabufs_ctl_new(context_object->vfd, driver_data->pollqueue);
+	ddev = devscan_find(driver_data->scan, pixelformat);
+	if (!ddev) {
+		request_err(dc, "No driver found for pixelformat %#x\n", pixelformat);
+		goto error;
+	}
+
+	context_object->mbc = mediabufs_ctl_new(dc, decdev_video_path(ddev),
+						driver_data->pollqueue);
 	if (!context_object->mbc) {
 		request_log("%s: Failed to create mediabufs_ctl\n", __func__);
 		goto error;

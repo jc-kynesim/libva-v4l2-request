@@ -38,6 +38,7 @@
 #include <h264-ctrls.h>
 #include <hevc-ctrls.h>
 
+#include "devscan.h"
 #include "utils.h"
 #include "v4l2.h"
 
@@ -127,20 +128,15 @@ VAStatus RequestQueryConfigProfiles(VADriverContextP context,
 {
 	struct request_data *driver_data = context->pDriverData;
 	unsigned int index = 0;
-	bool found;
 
-	found = v4l2_find_format(driver_data->video_fd,
-				 V4L2_BUF_TYPE_VIDEO_OUTPUT,
-				 V4L2_PIX_FMT_MPEG2_SLICE);
-	if (found && index < (V4L2_REQUEST_MAX_CONFIG_ATTRIBUTES - 2)) {
+	if (devscan_find(driver_data->scan, V4L2_PIX_FMT_MPEG2_SLICE) &&
+	    index < (V4L2_REQUEST_MAX_CONFIG_ATTRIBUTES - 2)) {
 		profiles[index++] = VAProfileMPEG2Simple;
 		profiles[index++] = VAProfileMPEG2Main;
 	}
 
-	found = v4l2_find_format(driver_data->video_fd,
-				 V4L2_BUF_TYPE_VIDEO_OUTPUT,
-				 V4L2_PIX_FMT_H264_SLICE_RAW);
-	if (found && index < (V4L2_REQUEST_MAX_CONFIG_ATTRIBUTES - 5)) {
+	if (devscan_find(driver_data->scan, V4L2_PIX_FMT_H264_SLICE_RAW) &&
+	    index < (V4L2_REQUEST_MAX_CONFIG_ATTRIBUTES - 5)) {
 		profiles[index++] = VAProfileH264Main;
 		profiles[index++] = VAProfileH264High;
 		profiles[index++] = VAProfileH264ConstrainedBaseline;
@@ -148,10 +144,8 @@ VAStatus RequestQueryConfigProfiles(VADriverContextP context,
 		profiles[index++] = VAProfileH264StereoHigh;
 	}
 
-	found = v4l2_find_format(driver_data->video_fd,
-				 V4L2_BUF_TYPE_VIDEO_OUTPUT,
-				 V4L2_PIX_FMT_HEVC_SLICE);
-	if (found && index < (V4L2_REQUEST_MAX_CONFIG_ATTRIBUTES - 1)) {
+	if (devscan_find(driver_data->scan, V4L2_PIX_FMT_HEVC_SLICE) &&
+	    index < (V4L2_REQUEST_MAX_CONFIG_ATTRIBUTES - 1)) {
 		profiles[index++] = VAProfileHEVCMain;
 		profiles[index++] = VAProfileHEVCMain10;
 	}

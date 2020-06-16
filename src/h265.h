@@ -31,7 +31,7 @@ struct object_context;
 struct object_surface;
 struct request_data;
 
-int h265_set_controls(struct request_data *driver_data,
+VAStatus h265_set_controls(struct request_data *driver_data,
 		      struct object_context *context_object,
 		      struct media_request * const mreq,
 		      struct object_surface *surface_object);

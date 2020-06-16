@@ -152,8 +152,6 @@ VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP dc)
 	object_heap_init(&dd->image_heap, sizeof(struct object_image),
 			 IMAGE_ID_OFFSET);
 
-	request_log("<<< %s\n", __func__);
-
 	status = devscan_build(dc, &dd->scan);
 	if (status != VA_STATUS_SUCCESS)
 		goto error;
@@ -194,8 +192,6 @@ VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP dc)
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 	}
 
-	dd->video_fd = video_fd;
-
 	dd->media_pool = media_pool_new(media_path, dd->pollqueue, 4);
 	if (!dd->media_pool) {
 		request_err(dc, "Failed to create media pool for '%s'\n", media_path);
@@ -230,8 +226,6 @@ VAStatus RequestTerminate(VADriverContextP context)
 	struct object_context *context_object;
 	struct object_config *config_object;
 	int iterator;
-
-	close(driver_data->video_fd);
 
 	/* Cleanup leftover buffers. */
 

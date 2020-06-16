@@ -54,7 +54,6 @@ struct object_context {
 	int flags;
 
 	bool stream_started;
-	int vfd;                /* Video fd */
 	struct timeval timeseq;
 
 	struct mediabufs_ctl *mbc;

@@ -407,6 +407,7 @@ static struct buf_pool* dmabuf_queue_new(const int vfd, struct pollqueue * pq,
 
 struct mediabufs_ctl {
 	atomic_int ref_count;  /* 0 is single ref for easier atomics */
+	VADriverContextP dc;
 	int vfd;
 	bool stream_on;
 	bool polling;
@@ -452,8 +453,6 @@ static int qent_v4l2_queue(struct mediabuf_qent *const be,
 		buffer.bytesused = dmabuf_len(be->dh[0]);
 		buffer.length = dmabuf_size(be->dh[0]);
 		buffer.m.fd = dmabuf_fd(be->dh[0]);
-
-		request_log("Q %s buf: fd=%d\n", is_dst ? "Dst" : "Src", buffer.m.fd);
 	}
 
 	if (!is_dst && mreq) {
@@ -933,6 +932,14 @@ VAStatus mediabufs_stream_off(struct mediabufs_ctl *const mbc)
 	return status;
 }
 
+VAStatus mediabufs_set_ext_ctrl(struct mediabufs_ctl *const mbc,
+				struct media_request * const mreq,
+				unsigned int id, void *data,
+				unsigned int size)
+{
+	int rv = v4l2_set_control(mbc->vfd, mreq, id, data, size);
+	return !rv ? VA_STATUS_SUCCESS : VA_STATUS_ERROR_OPERATION_FAILED;
+}
 
 VAStatus mediabufs_src_fmt_set(struct mediabufs_ctl *const mbc,
 			       const uint32_t pixfmt,
@@ -990,7 +997,6 @@ void mediabufs_ctl_unref(struct mediabufs_ctl **const pmbc)
 		return;
 	*pmbc = NULL;
 	n = atomic_fetch_sub(&mbc->ref_count, 1);
-	request_log("%s: n=%d\n", __func__, n);
 	if (n)
 		return;
 	mediabufs_ctl_delete(mbc);
@@ -998,32 +1004,33 @@ void mediabufs_ctl_unref(struct mediabufs_ctl **const pmbc)
 
 
 /* One of these per context */
-struct mediabufs_ctl * mediabufs_ctl_new(const int vfd, struct pollqueue *const pq)
+struct mediabufs_ctl * mediabufs_ctl_new(const VADriverContextP dc, const char * vpath, struct pollqueue *const pq)
 {
 	struct mediabufs_ctl *const mbc = calloc(1, sizeof(*mbc));
 
 	if (!mbc)
 		return NULL;
 
-	request_log("%s\n", __func__);
+	mbc->dc = dc;
 	mbc->src_fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
 	mbc->dst_fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	mbc->pq = pq;
 	pthread_mutex_init(&mbc->lock, NULL);
 
-	/* ** Open really ** */
-	mbc->vfd = dup(vfd);
-	if (mbc->vfd == -1)
+	mbc->vfd = open(vpath, O_RDWR);
+	if (mbc->vfd == -1) {
+		request_err(dc, "Failed to open video dev '%s': %s\n", vpath, strerror(errno));
 		goto fail0;
+	}
 
-	mbc->src = dmabuf_queue_new(vfd, pq, mbc->src_fmt.type);
+	mbc->src = dmabuf_queue_new(mbc->vfd, pq, mbc->src_fmt.type);
 	if (!mbc->src)
 		goto fail1;
 	/* Default cap type to mono-planar */
-	mbc->dst = dmabuf_queue_new(vfd, pq, mbc->dst_fmt.type);
+	mbc->dst = dmabuf_queue_new(mbc->vfd, pq, mbc->dst_fmt.type);
 	if (!mbc->dst)
 		goto fail2;
-	mbc->pt = polltask_new(vfd, POLLIN | POLLOUT, rw_poll_cb, mbc);
+	mbc->pt = polltask_new(mbc->vfd, POLLIN | POLLOUT, rw_poll_cb, mbc);
 	if (!mbc->pt)
 		goto fail3;
 
@@ -1040,7 +1047,7 @@ fail1:
 	close(mbc->vfd);
 fail0:
 	free(mbc);
-	request_log("%s: FAILED\n", __func__);
+	request_info(dc, "%s: FAILED\n", __func__);
 	return NULL;
 }
 

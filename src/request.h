@@ -58,8 +58,6 @@ struct request_data {
 	struct object_heap surface_heap;
 	atomic_uint surface_alloc_seq;
 
-	int video_fd;
-
 	struct devscan *scan;
 	struct pollqueue *pollqueue;
 	struct media_pool *media_pool;

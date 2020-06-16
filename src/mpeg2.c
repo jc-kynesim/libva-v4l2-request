@@ -39,8 +39,8 @@
 
 #include "v4l2.h"
 
-int mpeg2_set_controls(struct request_data *driver_data,
-		       struct object_context *context_object,
+VAStatus mpeg2_set_controls(struct request_data *driver_data,
+		       struct object_context *ctx,
 		       struct media_request * const mreq,
 		       struct object_surface *surface_object)
 {
@@ -57,7 +57,7 @@ int mpeg2_set_controls(struct request_data *driver_data,
 	struct object_surface *backward_reference_surface;
 	uint64_t timestamp;
 	unsigned int i;
-	int rc;
+	VAStatus rc;
 
 	memset(&slice_params, 0, sizeof(slice_params));
 
@@ -118,11 +118,11 @@ int mpeg2_set_controls(struct request_data *driver_data,
 	timestamp = v4l2_timeval_to_ns(&backward_reference_surface->timestamp);
 	slice_params.backward_ref_ts = timestamp;
 
-	rc = v4l2_set_control(driver_data->video_fd, mreq,
+	rc = mediabufs_set_ext_ctrl(ctx->mbc, mreq,
 			      V4L2_CID_MPEG_VIDEO_MPEG2_SLICE_PARAMS,
 			      &slice_params, sizeof(slice_params));
-	if (rc < 0)
-		return VA_STATUS_ERROR_OPERATION_FAILED;
+	if (rc != VA_STATUS_SUCCESS)
+		return rc;
 
 	if (iqmatrix_set) {
 		quantization.load_intra_quantiser_matrix =
@@ -145,10 +145,10 @@ int mpeg2_set_controls(struct request_data *driver_data,
 				iqmatrix->chroma_non_intra_quantiser_matrix[i];
 		}
 
-		rc = v4l2_set_control(driver_data->video_fd, mreq,
+		rc = mediabufs_set_ext_ctrl(ctx->mbc, mreq,
 				      V4L2_CID_MPEG_VIDEO_MPEG2_QUANTIZATION,
 				      &quantization, sizeof(quantization));
 	}
 
-	return 0;
+	return rc;
 }
