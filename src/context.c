@@ -166,8 +166,8 @@ VAStatus RequestDestroyContext(VADriverContextP vdc, VAContextID context_id)
 	if (ctx == NULL)
 		return VA_STATUS_ERROR_INVALID_CONTEXT;
 
-	for (i = 0; i != ctx->surfaces_count; ++i)
-		RequestSyncSurface(vdc, ctx->surfaces_ids[i]);
+//	for (i = 0; i != ctx->surfaces_count; ++i)
+//		RequestSyncSurface(vdc, ctx->surfaces_ids[i]);
 
 	free(ctx->surfaces_ids);
 

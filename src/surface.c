@@ -61,8 +61,6 @@ VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 	struct request_data *const rd = context->pDriverData;
 	const unsigned int seq = atomic_fetch_add(&rd->surface_alloc_seq, 1);
 
-	request_log("%s: %dx%d, seq=%u\n", __func__, width, height, seq);
-
 	for (i = 0; i < surfaces_count; i++) {
 		struct object_surface *os;
 		int id = object_heap_allocate(&rd->surface_heap);
