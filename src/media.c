@@ -281,7 +281,7 @@ static struct mediabuf_qent * bq_get_free(struct buf_pool *const bp)
 		if (be->next)
 			be->next->prev = be->prev;
 		else
-			bp->inuse_tail = be->prev;
+			bp->free_tail = be->prev;
 		bp->free_head = be->next;
 		be->next = NULL;
 		be->prev = NULL;
@@ -525,7 +525,7 @@ static void rw_poll_cb(void * v, short revents)
 	bool qrun = false;
 
 	if (!revents)
-		request_log("%s: Timeout\n", __func__);
+		request_info(mbc->dc, "%s: Timeout\n", __func__);
 
 	pthread_mutex_lock(&mbc->lock);
 	mbc->polling = false;
