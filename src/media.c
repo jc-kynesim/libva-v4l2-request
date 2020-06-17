@@ -239,7 +239,7 @@ struct buf_pool {
 	struct mediabuf_qent *inuse_tail;
 };
 
-void dmabuf_qent_delete(struct mediabuf_qent *const be)
+static void qent_delete(struct mediabuf_qent *const be)
 {
 	unsigned int i;
 	if (!be)
@@ -250,7 +250,7 @@ void dmabuf_qent_delete(struct mediabuf_qent *const be)
 	free(be);
 }
 
-struct mediabuf_qent *dmabuf_qent_new()
+static struct mediabuf_qent *qent_new()
 {
 	struct mediabuf_qent * be = malloc(sizeof(*be));
 	*be = (struct mediabuf_qent) {
@@ -308,10 +308,10 @@ static void bq_free_all_free(struct buf_pool *const bp)
 {
 	struct mediabuf_qent *be;
 	while ((be = bq_get_free(bp)) != NULL)
-		dmabuf_qent_delete(be);
+		qent_delete(be);
 }
 
-static void dmabuf_qent_put_free(struct buf_pool *const bp, struct mediabuf_qent *be)
+static void queue_put_free(struct buf_pool *const bp, struct mediabuf_qent *be)
 {
 	unsigned int i;
 
@@ -326,12 +326,12 @@ static void dmabuf_qent_put_free(struct buf_pool *const bp, struct mediabuf_qent
 	sem_post(&bp->free_sem);
 }
 
-static bool dmabuf_qent_is_inuse(const struct buf_pool *const bp)
+static bool qent_is_inuse(const struct buf_pool *const bp)
 {
 	return bp->inuse_tail != NULL;
 }
 
-static void qent_put_inuse(struct buf_pool *const bp, struct mediabuf_qent *be)
+static void queue_put_inuse(struct buf_pool *const bp, struct mediabuf_qent *be)
 {
 	if (!be)
 		return;
@@ -359,32 +359,24 @@ static struct mediabuf_qent *queue_get_free(struct buf_pool *const bp, struct po
 	return buf;
 }
 
-static struct mediabuf_qent * queue_find_fd(struct buf_pool *const bp, const int fd)
+static struct mediabuf_qent * queue_find_extract_fd(struct buf_pool *const bp, const int fd)
 {
 	struct mediabuf_qent *be;
 
 	pthread_mutex_lock(&bp->lock);
 	/* Expect 1st in Q, but allow anywhere */
 	for (be = bp->inuse_head; be; be = be->next) {
-		if (dmabuf_fd(be->dh[0]) == fd)
+		if (dmabuf_fd(be->dh[0]) == fd) {
+			bq_extract_inuse(bp, be);
 			break;
+		}
 	}
 	pthread_mutex_unlock(&bp->lock);
 
 	return be;
 }
 
-static void queue_extract_inuse(struct buf_pool *const bp, struct mediabuf_qent *const be)
-{
-	if (!be)
-		return;
-
-	pthread_mutex_lock(&bp->lock);
-	bq_extract_inuse(bp, be);
-	pthread_mutex_unlock(&bp->lock);
-}
-
-static void dmabuf_queue_delete(struct buf_pool *const bp)
+static void queue_delete(struct buf_pool *const bp)
 {
 	if (!bp)
 		return;
@@ -393,7 +385,7 @@ static void dmabuf_queue_delete(struct buf_pool *const bp)
 	free(bp);
 }
 
-static struct buf_pool* dmabuf_queue_new(const int vfd, struct pollqueue * pq,
+static struct buf_pool* queue_new(const int vfd, struct pollqueue * pq,
 				  enum v4l2_buf_type buftype)
 {
 	struct buf_pool *bp = calloc(1, sizeof(*bp));
@@ -502,7 +494,7 @@ static struct mediabuf_qent * qent_dequeue(struct buf_pool *const bp,
 	}
 
 	fd = mp ? planes[0].m.fd : buffer.m.fd;
-	be = queue_find_fd(bp, fd);
+	be = queue_find_extract_fd(bp, fd);
 	if (!be) {
 		request_log("Failed to find fd %d in Q\n", fd);
 		return NULL;
@@ -514,10 +506,10 @@ static struct mediabuf_qent * qent_dequeue(struct buf_pool *const bp,
 
 static bool mediabufs_wants_poll(const struct mediabufs_ctl *const mbc)
 {
-	return dmabuf_qent_is_inuse(mbc->src) || dmabuf_qent_is_inuse(mbc->dst);
+	return qent_is_inuse(mbc->src) || qent_is_inuse(mbc->dst);
 }
 
-static void rw_poll_cb(void * v, short revents)
+static void mediabufs_poll_cb(void * v, short revents)
 {
 	struct mediabufs_ctl *mbc = v;
 	struct mediabuf_qent *src_be = NULL;
@@ -525,7 +517,7 @@ static void rw_poll_cb(void * v, short revents)
 	bool qrun = false;
 
 	if (!revents)
-		request_info(mbc->dc, "%s: Timeout\n", __func__);
+		request_err(mbc->dc, "%s: Timeout\n", __func__);
 
 	pthread_mutex_lock(&mbc->lock);
 	mbc->polling = false;
@@ -536,10 +528,7 @@ static void rw_poll_cb(void * v, short revents)
 		dst_be = qent_dequeue(mbc->dst, mbc->vfd, mbc->dst_fmt.type);
 
 	/* Reschedule */
-
-	queue_extract_inuse(mbc->src, src_be);
-	queue_extract_inuse(mbc->dst, dst_be);
-	if (!mbc->polling && mediabufs_wants_poll(mbc)) {
+	if (mediabufs_wants_poll(mbc)) {
 		mbc->polling = true;
 		pollqueue_add_task(mbc->pq, mbc->pt, 2000);
 		qrun = true;
@@ -547,7 +536,7 @@ static void rw_poll_cb(void * v, short revents)
 	pthread_mutex_unlock(&mbc->lock);
 
 	if (src_be)
-		dmabuf_qent_put_free(mbc->src, src_be);
+		queue_put_free(mbc->src, src_be);
 	if (dst_be)
 		sem_post(&dst_be->sem);
 	if (!qrun)
@@ -592,12 +581,12 @@ VAStatus mediabufs_start_request(struct mediabufs_ctl *const mbc,
 
 	if (qent_v4l2_queue(src_be, mbc->vfd, mreq, &mbc->src_fmt, false, !is_final))
 		goto fail1;
-	qent_put_inuse(mbc->src, src_be);
+	queue_put_inuse(mbc->src, src_be);
 
 	if (dst_be &&
 	    qent_v4l2_queue(dst_be, mbc->vfd, NULL, &mbc->dst_fmt, true, false))
 		goto fail1;
-	qent_put_inuse(mbc->dst, dst_be);
+	queue_put_inuse(mbc->dst, dst_be);
 
 	if (!mbc->polling && mediabufs_wants_poll(mbc)) {
 		mbc->polling = true;
@@ -640,6 +629,7 @@ static int qent_alloc_from_fmt(struct mediabuf_qent *const be,
 	else {
 //		be->dh[0] = dmabuf_alloc(dbsc, fmt->fmt.pix.sizeimage);
 		size_t size = fmt->fmt.pix.sizeimage;
+#warning Fixed bitbuf size
 		if (size < 0x100000)
 			size = 0x100000;
 		be->dh[0] = dmabuf_alloc(dbsc, size);
@@ -763,12 +753,12 @@ VAStatus qent_dst_read_stop(struct mediabuf_qent *const be)
 
 void qent_dst_delete(struct mediabuf_qent *const be)
 {
-	dmabuf_qent_delete(be);
+	qent_delete(be);
 }
 
 struct mediabuf_qent* mediabufs_dst_qent_alloc(struct mediabufs_ctl *const mbc, struct dmabufs_ctrl *const dbsc)
 {
-	struct mediabuf_qent *const be = dmabuf_qent_new();
+	struct mediabuf_qent *const be = qent_new();
 	int rv;
 
 	if (qent_alloc_from_fmt(be, dbsc, &mbc->dst_fmt))
@@ -781,7 +771,7 @@ struct mediabuf_qent* mediabufs_dst_qent_alloc(struct mediabufs_ctl *const mbc, 
 	return be;
 
 fail:
-	dmabuf_qent_delete(be);
+	qent_delete(be);
 	return NULL;
 }
 
@@ -830,51 +820,51 @@ struct mediabuf_qent *mediabufs_src_qent_get(struct mediabufs_ctl *const mbc)
 }
 
 /* src format must have been set up before this */
-VAStatus mediabufs_src_pool_create(struct mediabufs_ctl *const rw,
+VAStatus mediabufs_src_pool_create(struct mediabufs_ctl *const mbc,
 			      struct dmabufs_ctrl * const dbsc,
 			      unsigned int n)
 {
 	unsigned int i;
 	struct v4l2_requestbuffers req = {
 		.count = n,
-		.type = rw->src_fmt.type,
+		.type = mbc->src_fmt.type,
 		.memory = V4L2_MEMORY_DMABUF
 	};
 
-	bq_free_all_free(rw->src);
-	while (ioctl(rw->vfd, VIDIOC_REQBUFS, &req) == -1) {
+	bq_free_all_free(mbc->src);
+	while (ioctl(mbc->vfd, VIDIOC_REQBUFS, &req) == -1) {
 		if (errno != EINTR) {
-			request_log("%s: Failed to request src bufs\n", __func__);
+			request_err(mbc->dc, "%s: Failed to request src bufs\n", __func__);
 			return VA_STATUS_ERROR_OPERATION_FAILED;
 		}
 	}
 
 	if (n > req.count) {
-		request_log("Only allocated %d of %d src buffers requested\n", req.count, n);
+		request_info(mbc->dc, "Only allocated %d of %d src buffers requested\n", req.count, n);
 		n = req.count;
 	}
 
 	for (i = 0; i != n; ++i) {
-		struct mediabuf_qent *const be = dmabuf_qent_new();
+		struct mediabuf_qent *const be = qent_new();
 		if (!be) {
-			request_log("Failed to create src be %d\n", i);
+			request_err(mbc->dc, "Failed to create src be %d\n", i);
 			goto fail;
 		}
-		if (qent_alloc_from_fmt(be, dbsc, &rw->src_fmt)) {
-			dmabuf_qent_delete(be);
+		if (qent_alloc_from_fmt(be, dbsc, &mbc->src_fmt)) {
+			qent_delete(be);
 			goto fail;
 		}
 		be->index = i;
 
-		dmabuf_qent_put_free(rw->src, be);
+		queue_put_free(mbc->src, be);
 	}
 
 	return VA_STATUS_SUCCESS;
 
 fail:
-	bq_free_all_free(rw->src);
+	bq_free_all_free(mbc->src);
 	req.count = 0;
-	while (ioctl(rw->vfd, VIDIOC_REQBUFS, &req) == -1 &&
+	while (ioctl(mbc->vfd, VIDIOC_REQBUFS, &req) == -1 &&
 	       errno == EINTR)
 		/* Loop */;
 
@@ -892,7 +882,6 @@ fail:
 */
 VAStatus mediabufs_stream_on(struct mediabufs_ctl *const mbc)
 {
-	request_log("%s\n", __func__);
 	if (mbc->stream_on)
 		return VA_STATUS_SUCCESS;
 
@@ -914,7 +903,6 @@ VAStatus mediabufs_stream_on(struct mediabufs_ctl *const mbc)
 VAStatus mediabufs_stream_off(struct mediabufs_ctl *const mbc)
 {
 	VAStatus status = VA_STATUS_SUCCESS;
-	request_log("%s\n", __func__);
 
 	if (!mbc->stream_on)
 		return VA_STATUS_SUCCESS;
@@ -965,8 +953,6 @@ static void mediabufs_ctl_delete(struct mediabufs_ctl *const mbc)
 	if (!mbc)
 		return;
 
-	request_log("%s\n", __func__);
-
 	polltask_delete(&mbc->pt);
 
 	mediabufs_stream_off(mbc);
@@ -975,8 +961,8 @@ static void mediabufs_ctl_delete(struct mediabufs_ctl *const mbc)
 	v4l2_request_buffers(mbc->vfd, mbc->src_fmt.type, 0);
 	v4l2_request_buffers(mbc->vfd, mbc->dst_fmt.type, 0);
 
-	dmabuf_queue_delete(mbc->dst);
-	dmabuf_queue_delete(mbc->src);
+	queue_delete(mbc->dst);
+	queue_delete(mbc->src);
 	close(mbc->vfd);
 	pthread_mutex_destroy(&mbc->lock);
 
@@ -1023,14 +1009,14 @@ struct mediabufs_ctl * mediabufs_ctl_new(const VADriverContextP dc, const char *
 		goto fail0;
 	}
 
-	mbc->src = dmabuf_queue_new(mbc->vfd, pq, mbc->src_fmt.type);
+	mbc->src = queue_new(mbc->vfd, pq, mbc->src_fmt.type);
 	if (!mbc->src)
 		goto fail1;
 	/* Default cap type to mono-planar */
-	mbc->dst = dmabuf_queue_new(mbc->vfd, pq, mbc->dst_fmt.type);
+	mbc->dst = queue_new(mbc->vfd, pq, mbc->dst_fmt.type);
 	if (!mbc->dst)
 		goto fail2;
-	mbc->pt = polltask_new(mbc->vfd, POLLIN | POLLOUT, rw_poll_cb, mbc);
+	mbc->pt = polltask_new(mbc->vfd, POLLIN | POLLOUT, mediabufs_poll_cb, mbc);
 	if (!mbc->pt)
 		goto fail3;
 
@@ -1040,9 +1026,9 @@ struct mediabufs_ctl * mediabufs_ctl_new(const VADriverContextP dc, const char *
 	return mbc;
 
 fail3:
-	dmabuf_queue_delete(mbc->dst);
+	queue_delete(mbc->dst);
 fail2:
-	dmabuf_queue_delete(mbc->src);
+	queue_delete(mbc->src);
 fail1:
 	close(mbc->vfd);
 fail0:
