@@ -24,31 +24,24 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "request.h"
-#include "surface.h"
-
-#include <assert.h>
-#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <poll.h>
 
 #include <sys/ioctl.h>
 #include <sys/mman.h>
-
-#include <va/va_drmcommon.h>
-#include <drm_fourcc.h>
 #include <linux/videodev2.h>
+#include <va/va_drmcommon.h>
 
-#include "media.h"
 #include "config.h"
+#include "media.h"
+#include "dmabufs.h"
+#include "picture.h"
+#include "request.h"
+#include "surface.h"
 #include "utils.h"
 #include "v4l2.h"
 #include "video.h"
-#include "dmabufs.h"
-#include "picture.h"
 
 VAStatus RequestCreateSurfaces2(VADriverContextP context, unsigned int format,
 				unsigned int width, unsigned int height,

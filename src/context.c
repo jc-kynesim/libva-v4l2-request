@@ -24,132 +24,88 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "context.h"
-#include "config.h"
-#include "devscan.h"
-#include "request.h"
-#include "surface.h"
-
 #include <stdlib.h>
 #include <string.h>
 
-#include <assert.h>
-
-#include <sys/ioctl.h>
-#include <sys/mman.h>
-
-#include <linux/videodev2.h>
-
-#include <mpeg2-ctrls.h>
-#include <h264-ctrls.h>
-#include <hevc-ctrls.h>
-
-#include "dmabufs.h"
-#include "media.h"
-#include "utils.h"
-#include "v4l2.h"
-
 #include "autoconfig.h"
-
-static uint32_t vaprofile_to_pixfmt(const VAProfile profile)
-{
-	switch (profile) {
-
-	case VAProfileMPEG2Simple:
-	case VAProfileMPEG2Main:
-		return V4L2_PIX_FMT_MPEG2_SLICE;
-
-	case VAProfileH264Main:
-	case VAProfileH264High:
-	case VAProfileH264ConstrainedBaseline:
-	case VAProfileH264MultiviewHigh:
-	case VAProfileH264StereoHigh:
-		return V4L2_PIX_FMT_H264_SLICE_RAW;
-
-	case VAProfileHEVCMain:
-	case VAProfileHEVCMain10:
-		return V4L2_PIX_FMT_HEVC_SLICE;
-
-	default:
-		break;
-	}
-	return 0;
-}
+#include "context.h"
+#include "config.h"
+#include "dmabufs.h"
+#include "devscan.h"
+#include "media.h"
+#include "request.h"
+#include "surface.h"
+#include "utils.h"
+#include "video.h"
 
 VAStatus RequestCreateContext(VADriverContextP dc, VAConfigID config_id,
 			      int picture_width, int picture_height, int flags,
 			      VASurfaceID *surfaces_ids, int surfaces_count,
 			      VAContextID *context_id)
 {
-	struct request_data *driver_data = dc->pDriverData;
-	struct object_config *config_object;
-	struct object_context *context_object = NULL;
+	struct request_data *const dd = dc->pDriverData;
+	struct object_config *const cfg = CONFIG(dd, config_id);
+	struct object_context *ctx = NULL;
 	VAContextID id;
 	VAStatus status;
-	unsigned int pixelformat;
+	uint32_t pixelformat;
 	const struct decdev *ddev;
 
-	config_object = CONFIG(driver_data, config_id);
-	if (config_object == NULL) {
-		status = VA_STATUS_ERROR_INVALID_CONFIG;
-		goto error;
-	}
+	if (cfg == NULL)
+		return VA_STATUS_ERROR_INVALID_CONFIG;
 
-	id = object_heap_allocate(&driver_data->context_heap);
-	context_object = CONTEXT(driver_data, id);
-	if (context_object == NULL) {
-		status = VA_STATUS_ERROR_ALLOCATION_FAILED;
-		goto error;
-	}
-	memset(&context_object->dpb, 0, sizeof(context_object->dpb));
+	id = object_heap_allocate(&dd->context_heap);
+	ctx = CONTEXT(dd, id);
+	if (ctx == NULL)
+		return VA_STATUS_ERROR_ALLOCATION_FAILED;
 
-	pixelformat = vaprofile_to_pixfmt(config_object->profile);
+	pixelformat = video_profile_to_src_pixfmt(cfg->profile);
 	if (!pixelformat) {
-		request_info(dc, "%s: Unknown vaprofle: %#x\n", __func__, config_object->profile);
-		goto error;
+		request_info(dc, "%s: Unknown vaprofle: %#x\n", __func__, cfg->profile);
+		goto fail;
 	}
 
-	ddev = devscan_find(driver_data->scan, pixelformat);
+	ddev = devscan_find(dd->scan, pixelformat);
 	if (!ddev) {
 		request_err(dc, "No driver found for pixelformat %#x\n", pixelformat);
-		goto error;
+		goto fail;
 	}
 
-	context_object->mbc = mediabufs_ctl_new(dc, decdev_video_path(ddev),
-						driver_data->pollqueue);
-	if (!context_object->mbc) {
+	ctx->mbc = mediabufs_ctl_new(dc, decdev_video_path(ddev),
+						dd->pollqueue);
+	if (!ctx->mbc) {
 		request_err(dc, "%s: Failed to create mediabufs_ctl\n", __func__);
-		goto error;
+		goto fail;
 	}
 
-	status = mediabufs_src_fmt_set(context_object->mbc,
+	status = mediabufs_src_fmt_set(ctx->mbc,
 				       pixelformat,
 				       picture_width, picture_height);
 	if (status != VA_STATUS_SUCCESS)
-		goto error;
+		goto fail2;
 
-	context_object->config_id = config_id;
-	context_object->render_surface_id = VA_INVALID_ID;
-	context_object->surfaces_ids = malloc(sizeof(*context_object->surfaces_ids) * surfaces_count);
-	context_object->surfaces_count = surfaces_count;
-	context_object->picture_width = picture_width;
-	context_object->picture_height = picture_height;
-	context_object->flags = flags;
+	ctx->surfaces_ids = malloc(sizeof(*ctx->surfaces_ids) * surfaces_count);
+	if (!ctx->surfaces_ids) {
+		status = VA_STATUS_ERROR_ALLOCATION_FAILED;
+		goto fail2;
+	}
+	ctx->surfaces_count = surfaces_count;
+	memcpy(ctx->surfaces_ids, surfaces_ids,
+	       sizeof(*ctx->surfaces_ids) * surfaces_count);
 
-	memcpy(context_object->surfaces_ids, surfaces_ids,
-	       sizeof(*context_object->surfaces_ids) * surfaces_count);
+	ctx->config_id = config_id;
+	ctx->render_surface_id = VA_INVALID_ID;
+	ctx->picture_width = picture_width;
+	ctx->picture_height = picture_height;
+	ctx->flags = flags;
 
 	*context_id = id;
+	return VA_STATUS_SUCCESS;
 
-	status = VA_STATUS_SUCCESS;
-	goto complete;
-
-error:
-	if (context_object != NULL)
-		object_heap_free(&driver_data->context_heap,
-				 (struct object_base *)context_object);
-
-complete:
+fail2:
+	mediabufs_ctl_unref(&ctx->mbc);
+fail:
+	object_heap_free(&dd->context_heap, &ctx->base);
 	return status;
 }
 

@@ -22,82 +22,44 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include <errno.h>
+#include <h264-ctrls.h>
+#include <hevc-ctrls.h>
+#include <mpeg2-ctrls.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <linux/videodev2.h>
 #include <sys/ioctl.h>
 
-#include <drm_fourcc.h>
-#include <linux/videodev2.h>
-
+#include "drm_fourcc.h"
 #include "utils.h"
 #include "video.h"
 
-static struct video_format formats[] = {
-	{
-		.description		= "SAND YUV",
-		.v4l2_format		= V4L2_PIX_FMT_NV12_COL128,
-		.v4l2_buffers_count	= 1,
-		.v4l2_mplane		= false,
-		.drm_format		= DRM_FORMAT_NV12,
-		.drm_modifier		= DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT(0),
-		.planes_count		= 2,
-		.bpp			= 16,
-	},
-	{
-		.description		= "SAND30 YUV",
-		.v4l2_format		= V4L2_PIX_FMT_NV12_10_COL128,
-		.v4l2_buffers_count	= 1,
-		.v4l2_mplane		= false,
-		.drm_format		= DRM_FORMAT_P030,
-		.drm_modifier		= DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT(0),
-		.planes_count		= 2,
-		.bpp			= 20,
-	},
-	{
-		.description		= "NV12 YUV",
-		.v4l2_format		= V4L2_PIX_FMT_NV12,
-		.v4l2_buffers_count	= 1,
-		.v4l2_mplane		= false,
-		.drm_format		= DRM_FORMAT_NV12,
-		.drm_modifier		= DRM_FORMAT_MOD_NONE,
-		.planes_count		= 2,
-		.bpp			= 16,
-	},
-	{
-		.description		= "Sunxi tiled NV12 YUV",
-		.v4l2_format		= V4L2_PIX_FMT_SUNXI_TILED_NV12,
-		.v4l2_buffers_count	= 1,
-		.v4l2_mplane		= false,
-		.drm_format		= DRM_FORMAT_NV12,
-		.drm_modifier		= DRM_FORMAT_MOD_ALLWINNER_TILED,
-		.planes_count		= 2,
-		.bpp			= 16
-	},
-};
-
-static unsigned int formats_count = sizeof(formats) / sizeof(formats[0]);
-
-struct video_format *video_format_find(unsigned int pixelformat)
+uint32_t video_profile_to_src_pixfmt(const VAProfile profile)
 {
-	unsigned int i;
+	switch (profile) {
 
-	for (i = 0; i < formats_count; i++)
-		if (formats[i].v4l2_format == pixelformat)
-			return &formats[i];
+	case VAProfileMPEG2Simple:
+	case VAProfileMPEG2Main:
+		return V4L2_PIX_FMT_MPEG2_SLICE;
 
-	return NULL;
+	case VAProfileH264Main:
+	case VAProfileH264High:
+	case VAProfileH264ConstrainedBaseline:
+	case VAProfileH264MultiviewHigh:
+	case VAProfileH264StereoHigh:
+		return V4L2_PIX_FMT_H264_SLICE_RAW;
+
+	case VAProfileHEVCMain:
+	case VAProfileHEVCMain10:
+		return V4L2_PIX_FMT_HEVC_SLICE;
+
+	default:
+		break;
+	}
+	return 0;
 }
-
-bool video_format_is_linear(struct video_format *format)
-{
-	if (format == NULL)
-		return true;
-
-	return format->drm_modifier == DRM_FORMAT_MOD_NONE;
-}
-
 
 VAStatus video_fmt_supported(const uint32_t fmt_v4l2,
 			     const enum v4l2_buf_type type_v4l2,

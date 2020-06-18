@@ -26,24 +26,11 @@
 #define _VIDEO_H_
 
 #include <stdint.h>
-#include <stdbool.h>
-#include <va/va.h>
+#include <va/va_backend.h>
 
 enum v4l2_buf_type;
 
-struct video_format {
-	char *description;
-	unsigned int v4l2_format;
-	unsigned int v4l2_buffers_count;
-	bool v4l2_mplane;
-	unsigned int drm_format;
-	uint64_t drm_modifier;
-	unsigned int planes_count;
-	unsigned int bpp;
-};
-
-struct video_format *video_format_find(unsigned int pixelformat);
-bool video_format_is_linear(struct video_format *format);
+uint32_t video_profile_to_src_pixfmt(const VAProfile profile);
 
 /*
  * Returns:
