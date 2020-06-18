@@ -61,6 +61,13 @@ uint32_t video_profile_to_src_pixfmt(const VAProfile profile)
 	return 0;
 }
 
+bool video_src_pixfmt_supported(const uint32_t pixfmt)
+{
+	return pixfmt == V4L2_PIX_FMT_H264_SLICE_RAW ||
+		pixfmt == V4L2_PIX_FMT_HEVC_SLICE ||
+		pixfmt == V4L2_PIX_FMT_MPEG2_SLICE;
+}
+
 VAStatus video_fmt_supported(const uint32_t fmt_v4l2,
 			     const enum v4l2_buf_type type_v4l2,
 			     const unsigned int rtfmt)

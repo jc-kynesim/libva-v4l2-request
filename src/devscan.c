@@ -1,9 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
-#include <h264-ctrls.h>
-#include <hevc-ctrls.h>
 #include <libudev.h>
-#include <mpeg2-ctrls.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -16,7 +13,7 @@
 #include "devscan.h"
 #include "utils.h"
 #include "v4l2.h"
-
+#include "video.h"
 
 struct decdev {
 	uint32_t src_fmt_v4l2;
@@ -74,13 +71,6 @@ void devscan_delete(struct devscan *const scan)
 	free(scan);
 }
 
-static bool decode_format_supported(uint32_t pixfmt)
-{
-	return pixfmt == V4L2_PIX_FMT_H264_SLICE_RAW ||
-		pixfmt == V4L2_PIX_FMT_HEVC_SLICE ||
-		pixfmt == V4L2_PIX_FMT_MPEG2_SLICE;
-}
-
 #define REQ_BUF_CAPS (\
 	V4L2_BUF_CAP_SUPPORTS_DMABUF |\
 	V4L2_BUF_CAP_SUPPORTS_REQUESTS |\
@@ -108,7 +98,7 @@ static void probe_formats(const VADriverContextP dc,
 			if (errno != EINTR)
 				return;
 		}
-		if (!decode_format_supported(fmtdesc.pixelformat))
+		if (!video_src_pixfmt_supported(fmtdesc.pixelformat))
 			continue;
 
 		if (v4l2_set_format(fd, type_v4l2, fmtdesc.pixelformat, 720, 480))

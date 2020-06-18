@@ -25,12 +25,15 @@
 #ifndef _VIDEO_H_
 #define _VIDEO_H_
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <va/va_backend.h>
 
 enum v4l2_buf_type;
 
 uint32_t video_profile_to_src_pixfmt(const VAProfile profile);
+
+bool video_src_pixfmt_supported(const uint32_t pixfmt);
 
 /*
  * Returns:
