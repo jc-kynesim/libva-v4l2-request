@@ -34,13 +34,8 @@ struct timeval;
 struct media_request;
 
 int v4l2_query_capabilities(int video_fd, unsigned int *capabilities);
-bool v4l2_find_format(int video_fd, unsigned int type,
-		      unsigned int pixelformat);
 int v4l2_set_format(int video_fd, unsigned int type, unsigned int pixelformat,
 		    unsigned int width, unsigned int height);
-int v4l2_get_format(int video_fd, unsigned int type, unsigned int *width,
-		    unsigned int *height, unsigned int *bytesperline,
-		    unsigned int *sizes, unsigned int *planes_count);
 int v4l2_query_buffer(int video_fd, unsigned int type, unsigned int index,
 		      unsigned int *lengths, unsigned int *offsets,
 		      unsigned int buffers_count);

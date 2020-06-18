@@ -129,7 +129,6 @@ static VAStatus probe_video_device(const VADriverContextP dc,
 				   const char *const mpath)
 {
 	VAStatus ret = VA_STATUS_ERROR_OPERATION_FAILED;
-	struct v4l2_capability capability = { 0 };
 	unsigned int capabilities = 0;
 	int video_fd = -1;
 	int rv;
@@ -146,16 +145,11 @@ static VAStatus probe_video_device(const VADriverContextP dc,
 		goto fail;
 	}
 
-	rv = ioctl(video_fd, VIDIOC_QUERYCAP, &capability);
+	rv = v4l2_query_capabilities(video_fd, &capabilities);
 	if (rv < 0) {
 		request_err(dc, "%s: get video capability failed, %s (%d)\n", __func__, strerror(errno), errno);
 		goto fail;
 	}
-
-	if (capability.capabilities & V4L2_CAP_DEVICE_CAPS)
-		capabilities = capability.device_caps;
-	else
-		capabilities = capability.capabilities;
 
 	request_info(dc, "%s: path=%s capabilities=%#x\n", __func__, path, capabilities);
 
