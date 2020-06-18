@@ -158,7 +158,6 @@ VAStatus RequestDestroyContext(VADriverContextP vdc, VAContextID context_id)
 {
 	struct request_data *driver_data = vdc->pDriverData;
 	struct object_context *ctx;
-	unsigned int i;
 
 	request_log("%s: id=%#x\n", __func__, context_id);
 

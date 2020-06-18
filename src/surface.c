@@ -337,6 +337,8 @@ VAStatus RequestExportSurfaceHandle(VADriverContextP context,
 	if (surf == NULL)
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 
+	RequestSyncSurface(context, surface_id);
+
 	*desc = (VADRMPRIMESurfaceDescriptor) {
 		.fourcc         = surf->pd.fmt_vaapi,
 		.width          = surf->pd.req_width,

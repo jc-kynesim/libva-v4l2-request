@@ -40,24 +40,25 @@ int media_request_start(struct media_request * const req);
 
 
 struct mediabufs_ctl;
-struct mediabuf_qent;
+struct qent_src;
+struct qent_dst;
 struct dmabufs_ctrl;
 
-int qent_src_params_set(struct mediabuf_qent *const be, const struct timeval * timestamp);
-int qent_src_data_copy(struct mediabuf_qent *const be, const void *const src, const size_t len);
-int qent_dst_dup_fd(const struct mediabuf_qent *const be, unsigned int plane);
-VAStatus qent_dst_wait(struct mediabuf_qent *const be);
-void qent_dst_delete(struct mediabuf_qent *const be);
-const uint8_t * qent_dst_data(struct mediabuf_qent *const be, unsigned int buf_no);
-VAStatus qent_dst_read_start(struct mediabuf_qent *const be);
-VAStatus qent_dst_read_stop(struct mediabuf_qent *const be);
+int qent_src_params_set(struct qent_src *const be, const struct timeval * timestamp);
+int qent_src_data_copy(struct qent_src *const be, const void *const src, const size_t len);
+int qent_dst_dup_fd(const struct qent_dst *const be, unsigned int plane);
+VAStatus qent_dst_wait(struct qent_dst *const be);
+void qent_dst_delete(struct qent_dst *const be);
+const uint8_t * qent_dst_data(struct qent_dst *const be, unsigned int buf_no);
+VAStatus qent_dst_read_start(struct qent_dst *const be);
+VAStatus qent_dst_read_stop(struct qent_dst *const be);
 
 VAStatus mediabufs_start_request(struct mediabufs_ctl *const mbc,
 			    struct media_request *const mreq,
-			    struct mediabuf_qent *const src_be,
-			    struct mediabuf_qent *const dst_be,
+			    struct qent_src *const src_be,
+			    struct qent_dst *const dst_be,
 			    const bool is_final);
-struct mediabuf_qent* mediabufs_dst_qent_alloc(struct mediabufs_ctl *const mbc,
+struct qent_dst* mediabufs_dst_qent_alloc(struct mediabufs_ctl *const mbc,
 					       struct dmabufs_ctrl *const dbsc);
 
 VAStatus mediabufs_stream_on(struct mediabufs_ctl *const mbc);
@@ -67,7 +68,7 @@ VAStatus mediabufs_dst_fmt_set(struct mediabufs_ctl *const mbc,
 			   const unsigned int rtfmt,
 			   const unsigned int width,
 			   const unsigned int height);
-struct mediabuf_qent *mediabufs_src_qent_get(struct mediabufs_ctl *const mbc);
+struct qent_src *mediabufs_src_qent_get(struct mediabufs_ctl *const mbc);
 VAStatus mediabufs_set_ext_ctrl(struct mediabufs_ctl *const mbc,
 				struct media_request * const mreq,
 				unsigned int id, void *data,

@@ -209,7 +209,7 @@ static VAStatus bit_block_add(struct bit_stash *const bs,
 }
 
 
-static VAStatus codec_store_buffer(struct mediabuf_qent *src_qent,
+static VAStatus codec_store_buffer(struct qent_base *src_qent,
 				   VAProfile profile,
 				   struct object_surface *const surf,
 				   const VABufferType buftype,
@@ -363,7 +363,7 @@ static VAStatus flush_data(struct request_data *driver_data,
 			   struct object_context *ctx,
 			   struct object_config *cfg,
 			   struct object_surface *surf,
-			   struct mediabuf_qent * src_qent,
+			   struct qent_base * src_qent,
 			   bool is_last)
 {
 	VAStatus rc;
@@ -539,7 +539,7 @@ VAStatus RequestEndPicture(VADriverContextP context, VAContextID context_id)
 	VAStatus rv;
 	unsigned int n;
 	unsigned int i;
-	struct mediabuf_qent *src_qent = NULL;
+	struct qent_base *src_qent = NULL;
 
 	ctx = CONTEXT(driver_data, context_id);
 	if (ctx == NULL)

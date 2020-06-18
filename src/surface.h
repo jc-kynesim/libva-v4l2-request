@@ -47,7 +47,7 @@ enum surface_alloc_state {
 
 struct request_data;
 struct bit_stash;
-struct mediabuf_qent;
+struct qent_base;
 
 struct object_surface {
 	struct object_base base;
@@ -84,7 +84,7 @@ struct object_surface {
 	unsigned int destination_buffers_count;
 	struct dmabuf_h * destination_dh[VIDEO_MAX_PLANES];
 #endif
-	struct mediabuf_qent *qent;
+	struct qent_dst *qent;
 
 	unsigned int slices_size;
 	unsigned int slices_count;
