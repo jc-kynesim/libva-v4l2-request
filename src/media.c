@@ -235,6 +235,7 @@ struct qent_src {
 struct qent_dst {
 	struct qent_base base;
 
+	bool waiting;
 	pthread_mutex_t lock;
 	pthread_cond_t cond;
 };
@@ -267,7 +268,7 @@ static inline struct qent_src *base_to_src(struct qent_base *be)
 	.index  = INDEX_UNSET\
 }
 
-static void qent_base_delete(struct qent_base *const be)
+static void qe_base_delete(struct qent_base *const be)
 {
 	unsigned int i;
 	for (i = 0; i != VIDEO_MAX_PLANES; ++i)
@@ -275,14 +276,14 @@ static void qent_base_delete(struct qent_base *const be)
 	free(be);
 }
 
-static void qent_src_delete(struct qent_src *const be_src)
+static void qe_src_delete(struct qent_src *const be_src)
 {
 	if (!be_src)
 		return;
-	qent_base_delete(&be_src->base);
+	qe_base_delete(&be_src->base);
 }
 
-static struct qent_src * qent_src_new(void)
+static struct qent_src * qe_src_new(void)
 {
 	struct qent_src *const be_src = malloc(sizeof(*be_src));
 	if (!be_src)
@@ -340,7 +341,7 @@ static void bq_free_all_free_src(struct buf_pool *const bp)
 {
 	struct qent_base *be;
 	while ((be = bq_get_free(bp)) != NULL)
-		qent_src_delete(base_to_src(be));
+		qe_src_delete(base_to_src(be));
 }
 
 static void queue_put_free(struct buf_pool *const bp, struct qent_base *be)
@@ -358,7 +359,7 @@ static void queue_put_free(struct buf_pool *const bp, struct qent_base *be)
 	sem_post(&bp->free_sem);
 }
 
-static bool qent_is_inuse(const struct buf_pool *const bp)
+static bool queue_is_inuse(const struct buf_pool *const bp)
 {
 	return bp->inuse_tail != NULL;
 }
@@ -444,7 +445,7 @@ struct mediabufs_ctl {
 	struct v4l2_format dst_fmt;
 };
 
-static int qent_v4l2_queue(struct qent_base *const be,
+static int qe_v4l2_queue(struct qent_base *const be,
 			   const int vfd, struct media_request *const mreq,
 			   const struct v4l2_format *const fmt,
 			   const bool is_dst, const bool hold_flag)
@@ -501,7 +502,7 @@ static int qent_v4l2_queue(struct qent_base *const be,
 	return 0;
 }
 
-static struct qent_base * qent_dequeue(struct buf_pool *const bp,
+static struct qent_base * qe_dequeue(struct buf_pool *const bp,
 				     const int vfd,
 				     const enum v4l2_buf_type buftype)
 {
@@ -536,9 +537,28 @@ static struct qent_base * qent_dequeue(struct buf_pool *const bp,
 	return be;
 }
 
+static void qe_dst_done(struct qent_dst *const dst_be)
+{
+	pthread_mutex_lock(&dst_be->lock);
+	dst_be->waiting = false;
+	pthread_cond_broadcast(&dst_be->cond);
+	pthread_mutex_unlock(&dst_be->lock);
+}
+
+static bool qe_dst_waiting(struct qent_dst *const dst_be)
+{
+	bool waiting;
+	pthread_mutex_lock(&dst_be->lock);
+	waiting = dst_be->waiting;
+	dst_be->waiting = true;
+	pthread_mutex_unlock(&dst_be->lock);
+	return waiting;
+}
+
+
 static bool mediabufs_wants_poll(const struct mediabufs_ctl *const mbc)
 {
-	return qent_is_inuse(mbc->src) || qent_is_inuse(mbc->dst);
+	return queue_is_inuse(mbc->src) || queue_is_inuse(mbc->dst);
 }
 
 static void mediabufs_poll_cb(void * v, short revents)
@@ -555,9 +575,9 @@ static void mediabufs_poll_cb(void * v, short revents)
 	mbc->polling = false;
 
 	if ((revents & POLLOUT) != 0)
-		src_be = base_to_src(qent_dequeue(mbc->src, mbc->vfd, mbc->src_fmt.type));
+		src_be = base_to_src(qe_dequeue(mbc->src, mbc->vfd, mbc->src_fmt.type));
 	if ((revents & POLLIN) != 0)
-		dst_be = base_to_dst(qent_dequeue(mbc->dst, mbc->vfd, mbc->dst_fmt.type));
+		dst_be = base_to_dst(qe_dequeue(mbc->dst, mbc->vfd, mbc->dst_fmt.type));
 
 	/* Reschedule */
 	if (mediabufs_wants_poll(mbc)) {
@@ -570,7 +590,7 @@ static void mediabufs_poll_cb(void * v, short revents)
 	if (src_be)
 		queue_put_free(mbc->src, &src_be->base);
 	if (dst_be)
-		pthread_cond_broadcast(&dst_be->cond);
+		qe_dst_done(dst_be);
 	if (!qrun)
 		mediabufs_ctl_unref(&mbc);
 }
@@ -617,14 +637,19 @@ VAStatus mediabufs_start_request(struct mediabufs_ctl *const mbc,
 {
 	pthread_mutex_lock(&mbc->lock);
 
-	if (qent_v4l2_queue(&src_be->base, mbc->vfd, mreq, &mbc->src_fmt, false, !is_final))
+	if (dst_be) {
+		if (qe_dst_waiting(dst_be)) {
+			request_info(mbc->dc, "Request buffer already waiting on start\n");
+			goto fail1;
+		}
+		if (qe_v4l2_queue(&dst_be->base, mbc->vfd, NULL, &mbc->dst_fmt, true, false))
+			goto fail1;
+		queue_put_inuse(mbc->dst, &dst_be->base);
+	}
+
+	if (qe_v4l2_queue(&src_be->base, mbc->vfd, mreq, &mbc->src_fmt, false, !is_final))
 		goto fail1;
 	queue_put_inuse(mbc->src, &src_be->base);
-
-	if (dst_be &&
-	    qent_v4l2_queue(&dst_be->base, mbc->vfd, NULL, &mbc->dst_fmt, true, false))
-		goto fail1;
-	queue_put_inuse(mbc->dst, &dst_be->base);
 
 	if (!mbc->polling && mediabufs_wants_poll(mbc)) {
 		mbc->polling = true;
@@ -639,12 +664,14 @@ VAStatus mediabufs_start_request(struct mediabufs_ctl *const mbc,
 	return VA_STATUS_SUCCESS;
 
 fail1:
+	if (dst_be)
+		qe_dst_done(dst_be);
 	pthread_mutex_unlock(&mbc->lock);
 	return VA_STATUS_ERROR_OPERATION_FAILED;
 }
 
 
-static int qent_alloc_from_fmt(struct qent_base *const be,
+static int qe_alloc_from_fmt(struct qent_base *const be,
 			       struct dmabufs_ctrl *const dbsc,
 			       const struct v4l2_format *const fmt)
 {
@@ -654,8 +681,7 @@ static int qent_alloc_from_fmt(struct qent_base *const be,
 			be->dh[i] = dmabuf_alloc(dbsc,
 				fmt->fmt.pix_mp.plane_fmt[i].sizeimage);
 			/* On failure tidy up and die */
-			if (!be->dh[i])
-			{
+			if (!be->dh[i]) {
 				while (i--) {
 					dmabuf_free(be->dh[i]);
 					be->dh[i] = NULL;
@@ -748,10 +774,10 @@ VAStatus qent_dst_wait(struct qent_dst *const be_dst)
 	enum qent_status estat;
 
 	pthread_mutex_lock(&be_dst->lock);
-	while ((estat = be->status) == QENT_WAITING &&
+	while (be_dst->waiting &&
 	       !pthread_cond_wait(&be_dst->cond, &be_dst->lock))
 		/* Loop */;
-	be->status = QENT_PENDING;
+	estat = be->status;
 	pthread_mutex_unlock(&be_dst->lock);
 
 	return estat == QENT_DONE ? VA_STATUS_SUCCESS :
@@ -799,7 +825,7 @@ void qent_dst_delete(struct qent_dst *const be_dst)
 
 	pthread_cond_destroy(&be_dst->cond);
 	pthread_mutex_destroy(&be_dst->lock);
-	qent_base_delete(&be_dst->base);
+	qe_base_delete(&be_dst->base);
 }
 
 struct qent_dst* mediabufs_dst_qent_alloc(struct mediabufs_ctl *const mbc, struct dmabufs_ctrl *const dbsc)
@@ -816,7 +842,7 @@ struct qent_dst* mediabufs_dst_qent_alloc(struct mediabufs_ctl *const mbc, struc
 		.cond = PTHREAD_COND_INITIALIZER
 	};
 
-	if (qent_alloc_from_fmt(&be_dst->base, dbsc, &mbc->dst_fmt))
+	if (qe_alloc_from_fmt(&be_dst->base, dbsc, &mbc->dst_fmt))
 		goto fail;
 
 	rv = v4l2_create_buffers(mbc->vfd, mbc->dst_fmt.type, V4L2_MEMORY_DMABUF, 1, &be_dst->base.index);
@@ -900,13 +926,13 @@ VAStatus mediabufs_src_pool_create(struct mediabufs_ctl *const mbc,
 	}
 
 	for (i = 0; i != n; ++i) {
-		struct qent_src *const be_src = qent_src_new();
+		struct qent_src *const be_src = qe_src_new();
 		if (!be_src) {
 			request_err(mbc->dc, "Failed to create src be %d\n", i);
 			goto fail;
 		}
-		if (qent_alloc_from_fmt(&be_src->base, dbsc, &mbc->src_fmt)) {
-			qent_src_delete(be_src);
+		if (qe_alloc_from_fmt(&be_src->base, dbsc, &mbc->src_fmt)) {
+			qe_src_delete(be_src);
 			goto fail;
 		}
 		be_src->base.index = i;

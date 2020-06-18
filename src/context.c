@@ -45,6 +45,7 @@
 #include <hevc-ctrls.h>
 
 #include "dmabufs.h"
+#include "media.h"
 #include "utils.h"
 #include "v4l2.h"
 
@@ -104,7 +105,7 @@ VAStatus RequestCreateContext(VADriverContextP dc, VAConfigID config_id,
 
 	pixelformat = vaprofile_to_pixfmt(config_object->profile);
 	if (!pixelformat) {
-		request_log("%s: Unknown vaprofle: %#x\n", __func__, config_object->profile);
+		request_info(dc, "%s: Unknown vaprofle: %#x\n", __func__, config_object->profile);
 		goto error;
 	}
 
@@ -117,7 +118,7 @@ VAStatus RequestCreateContext(VADriverContextP dc, VAConfigID config_id,
 	context_object->mbc = mediabufs_ctl_new(dc, decdev_video_path(ddev),
 						driver_data->pollqueue);
 	if (!context_object->mbc) {
-		request_log("%s: Failed to create mediabufs_ctl\n", __func__);
+		request_err(dc, "%s: Failed to create mediabufs_ctl\n", __func__);
 		goto error;
 	}
 
@@ -140,8 +141,6 @@ VAStatus RequestCreateContext(VADriverContextP dc, VAConfigID config_id,
 
 	*context_id = id;
 
-	request_log("%s: id=%#x\n", __func__, id);
-
 	status = VA_STATUS_SUCCESS;
 	goto complete;
 
@@ -159,14 +158,9 @@ VAStatus RequestDestroyContext(VADriverContextP vdc, VAContextID context_id)
 	struct request_data *driver_data = vdc->pDriverData;
 	struct object_context *ctx;
 
-	request_log("%s: id=%#x\n", __func__, context_id);
-
 	ctx = CONTEXT(driver_data, context_id);
 	if (ctx == NULL)
 		return VA_STATUS_ERROR_INVALID_CONTEXT;
-
-//	for (i = 0; i != ctx->surfaces_count; ++i)
-//		RequestSyncSurface(vdc, ctx->surfaces_ids[i]);
 
 	free(ctx->surfaces_ids);
 

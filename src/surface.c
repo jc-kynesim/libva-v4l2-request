@@ -145,23 +145,20 @@ VAStatus RequestDestroySurfaces(VADriverContextP context,
 	return VA_STATUS_SUCCESS;
 }
 
-VAStatus queue_await_completion(struct request_data *driver_data, struct object_surface *surface_object, bool last)
+VAStatus surface_sync(struct request_data *driver_data, struct object_surface *surf)
 {
 	VAStatus status;
 
-	if (last) {
-		status = qent_dst_wait(surface_object->qent);
-		if (status != VA_STATUS_SUCCESS) {
-			request_log("qent_dst_wait failed\n");
-			goto error;
-		}
+	if (surf->status != VASurfaceRendering)
+		return VA_STATUS_SUCCESS;
 
-		surface_object->status = VASurfaceDisplaying;
-	}
+	status = qent_dst_wait(surf->qent);
+	/* Ignore decode errors for now */
+	if (status != VA_STATUS_SUCCESS && status != VA_STATUS_ERROR_DECODING_ERROR)
+		return status;
 
-	status = VA_STATUS_SUCCESS;
-error:
-	return status;
+	surf->status = VASurfaceDisplaying;
+	return VA_STATUS_SUCCESS;
 }
 
 VAStatus RequestSyncSurface(VADriverContextP context, VASurfaceID surface_id)
@@ -173,10 +170,7 @@ VAStatus RequestSyncSurface(VADriverContextP context, VASurfaceID surface_id)
 	if (surface_object == NULL)
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 
-	if (surface_object->status != VASurfaceRendering)
-		return VA_STATUS_SUCCESS;
-
-	return queue_await_completion(driver_data, surface_object, true);
+	return surface_sync(driver_data, surface_object);
 }
 
 static int add_pixel_format_attributes(VASurfaceAttrib *const attributes_list,
@@ -337,7 +331,7 @@ VAStatus RequestExportSurfaceHandle(VADriverContextP context,
 	if (surf == NULL)
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 
-	RequestSyncSurface(context, surface_id);
+	qent_dst_wait(surf->qent);
 
 	*desc = (VADRMPRIMESurfaceDescriptor) {
 		.fourcc         = surf->pd.fmt_vaapi,

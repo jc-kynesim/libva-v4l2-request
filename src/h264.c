@@ -26,15 +26,16 @@
  */
 
 #include <assert.h>
+#include <h264-ctrls.h>
 #include <limits.h>
 #include <string.h>
 
+#include <linux/videodev2.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 
-#include <linux/videodev2.h>
-#include <h264-ctrls.h>
-
+#include "context.h"
+#include "media.h"
 #include "request.h"
 #include "surface.h"
 #include "v4l2.h"

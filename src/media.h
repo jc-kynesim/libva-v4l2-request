@@ -25,6 +25,12 @@ e.h
 #ifndef _MEDIA_H_
 #define _MEDIA_H_
 
+#include <stdbool.h>
+#include <stdint.h>
+#include <va/va_backend.h>
+
+struct v4l2_format;
+
 struct pollqueue;
 struct media_request;
 struct media_pool;

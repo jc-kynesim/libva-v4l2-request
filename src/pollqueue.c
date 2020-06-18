@@ -245,8 +245,6 @@ struct pollqueue * pollqueue_new(void)
 	pollqueue_add_task(pq, pq->prod_pt, -1);
 	if (pthread_create(&pq->worker, NULL, poll_thread, pq))
 		goto fail3;
-
-	request_log("%s: %p\n", __func__, pq);
 	return pq;
 
 fail3:
@@ -263,7 +261,6 @@ void pollqueue_delete(struct pollqueue **const ppq)
 	struct pollqueue * pq = *ppq;
 	void *rv;
 
-	request_log("%s: %p\n", __func__, pq);
 	if (!pq)
 		return;
 	*ppq = NULL;

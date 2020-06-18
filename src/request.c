@@ -24,39 +24,30 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include <linux/videodev2.h>
+#include <va/va_backend.h>
+
+#include "autoconfig.h"
 #include "buffer.h"
+#include "dmabufs.h"
 #include "config.h"
 #include "context.h"
 #include "devscan.h"
 #include "image.h"
+#include "media.h"
 #include "picture.h"
-#include "subpicture.h"
-#include "surface.h"
-
-#include "autoconfig.h"
-
-#include <va/va_backend.h>
-
-#include "dmabufs.h"
 #include "pollqueue.h"
 #include "request.h"
+#include "subpicture.h"
+#include "surface.h"
 #include "utils.h"
 #include "v4l2.h"
-
-#include <assert.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <errno.h>
-
-#include <fcntl.h>
-#include <stdarg.h>
-#include <string.h>
-#include <unistd.h>
-
-#include <sys/ioctl.h>
-
-#include <linux/videodev2.h>
-
 
 /* Set default visibility for the init function only. */
 VAStatus __attribute__((visibility("default")))
@@ -65,15 +56,9 @@ VA_DRIVER_INIT_FUNC(VADriverContextP context);
 VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP dc)
 {
 	struct request_data *dd;
-	struct VADriverVTable *vtable = dc->vtable;
+	struct VADriverVTable *const vtable = dc->vtable;
 	VAStatus status;
-	unsigned int capabilities;
-	unsigned int capabilities_required;
-	int video_fd = -1;
-	const char *video_path;
-	const char *media_path;
-	const struct decdev * decdev;
-	int rc;
+	const struct decdev *decdev;
 
 	dc->version_major = VA_MAJOR_VERSION;
 	dc->version_minor = VA_MINOR_VERSION;
@@ -140,6 +125,7 @@ VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP dc)
 		return VA_STATUS_ERROR_ALLOCATION_FAILED;
 
 	dc->pDriverData = dd;
+	dd->dc = dc;
 
 	object_heap_init(&dd->config_heap,
 			 sizeof(struct object_config), CONFIG_ID_OFFSET);
@@ -162,64 +148,36 @@ VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP dc)
 		goto error;
 	}
 
-	video_path = decdev_video_path(decdev);
-	media_path = decdev_media_path(decdev);
-
-//	video_fd = open(video_path, O_RDWR | O_NONBLOCK);
-	video_fd = open(video_path, O_RDWR);
-	if (video_fd < 0) {
-		request_err(dc, "Failed to open '%s': %s\n", video_path, strerror(errno));
-		return VA_STATUS_ERROR_OPERATION_FAILED;
-	}
-
-	rc = v4l2_query_capabilities(video_fd, &capabilities);
-	if (rc < 0) {
-		status = VA_STATUS_ERROR_OPERATION_FAILED;
-		goto error;
-	}
-
-	capabilities_required = V4L2_CAP_STREAMING;
-
-	if ((capabilities & capabilities_required) != capabilities_required) {
-		request_err(dc, "Missing required driver capabilities\n");
-		status = VA_STATUS_ERROR_OPERATION_FAILED;
+	dd->dmabufs_ctrl = dmabufs_ctrl_new();
+	if (!dd->dmabufs_ctrl) {
+		request_err(dc, "Failed to get dmabufs\n");
 		goto error;
 	}
 
 	dd->pollqueue = pollqueue_new();
 	if (!dd->pollqueue) {
 		request_err(dc, "Failed to create pollqueue\n");
-		return VA_STATUS_ERROR_OPERATION_FAILED;
+		goto error;
 	}
 
-	dd->media_pool = media_pool_new(media_path, dd->pollqueue, 4);
+	dd->media_pool = media_pool_new(decdev_media_path(decdev),
+					dd->pollqueue, 4);
 	if (!dd->media_pool) {
-		request_err(dc, "Failed to create media pool for '%s'\n", media_path);
-		return VA_STATUS_ERROR_OPERATION_FAILED;
+		request_err(dc, "Failed to create media pool for '%s'\n",
+			    decdev_media_path(decdev));
+		goto error;
 	}
 
-	dd->dmabufs_ctrl = dmabufs_ctrl_new();
-	if (!dd->dmabufs_ctrl) {
-		request_err(dc, "Failed to get dmabufs\n");
-		return VA_STATUS_ERROR_OPERATION_FAILED;
-	}
-
-	status = VA_STATUS_SUCCESS;
-	goto complete;
+	return VA_STATUS_SUCCESS;
 
 error:
-	status = VA_STATUS_ERROR_OPERATION_FAILED;
-
-	if (video_fd >= 0)
-		close(video_fd);
-
-complete:
-	return status;
+	RequestTerminate(dc);
+	return VA_STATUS_ERROR_OPERATION_FAILED;
 }
 
-VAStatus RequestTerminate(VADriverContextP context)
+VAStatus RequestTerminate(VADriverContextP dc)
 {
-	struct request_data *driver_data = context->pDriverData;
+	struct request_data *const dd = dc->pDriverData;
 	struct object_buffer *buffer_object;
 	struct object_image *image_object;
 	struct object_surface *surface_object;
@@ -230,64 +188,66 @@ VAStatus RequestTerminate(VADriverContextP context)
 	/* Cleanup leftover buffers. */
 
 	image_object = (struct object_image *)
-		object_heap_first(&driver_data->image_heap, &iterator);
+		object_heap_first(&dd->image_heap, &iterator);
 	while (image_object != NULL) {
-		RequestDestroyImage(context, (VAImageID)image_object->base.id);
+		RequestDestroyImage(dc, (VAImageID)image_object->base.id);
 		image_object = (struct object_image *)
-			object_heap_next(&driver_data->image_heap, &iterator);
+			object_heap_next(&dd->image_heap, &iterator);
 	}
 
-	object_heap_destroy(&driver_data->image_heap);
+	object_heap_destroy(&dd->image_heap);
 
 	buffer_object = (struct object_buffer *)
-		object_heap_first(&driver_data->buffer_heap, &iterator);
+		object_heap_first(&dd->buffer_heap, &iterator);
 	while (buffer_object != NULL) {
-		RequestDestroyBuffer(context,
+		RequestDestroyBuffer(dc,
 				     (VABufferID)buffer_object->base.id);
 		buffer_object = (struct object_buffer *)
-			object_heap_next(&driver_data->buffer_heap, &iterator);
+			object_heap_next(&dd->buffer_heap, &iterator);
 	}
 
-	object_heap_destroy(&driver_data->buffer_heap);
+	object_heap_destroy(&dd->buffer_heap);
 
 	surface_object = (struct object_surface *)
-		object_heap_first(&driver_data->surface_heap, &iterator);
+		object_heap_first(&dd->surface_heap, &iterator);
 	while (surface_object != NULL) {
-		RequestDestroySurfaces(context,
+		RequestDestroySurfaces(dc,
 				      (VASurfaceID *)&surface_object->base.id, 1);
 		surface_object = (struct object_surface *)
-			object_heap_next(&driver_data->surface_heap, &iterator);
+			object_heap_next(&dd->surface_heap, &iterator);
 	}
 
-	object_heap_destroy(&driver_data->surface_heap);
+	object_heap_destroy(&dd->surface_heap);
 
 	context_object = (struct object_context *)
-		object_heap_first(&driver_data->context_heap, &iterator);
+		object_heap_first(&dd->context_heap, &iterator);
 	while (context_object != NULL) {
-		RequestDestroyContext(context,
+		RequestDestroyContext(dc,
 				      (VAContextID)context_object->base.id);
 		context_object = (struct object_context *)
-			object_heap_next(&driver_data->context_heap, &iterator);
+			object_heap_next(&dd->context_heap, &iterator);
 	}
 
-	object_heap_destroy(&driver_data->context_heap);
+	object_heap_destroy(&dd->context_heap);
 
 	config_object = (struct object_config *)
-		object_heap_first(&driver_data->config_heap, &iterator);
+		object_heap_first(&dd->config_heap, &iterator);
 	while (config_object != NULL) {
-		RequestDestroyConfig(context,
+		RequestDestroyConfig(dc,
 				     (VAConfigID)config_object->base.id);
 		config_object = (struct object_config *)
-			object_heap_next(&driver_data->config_heap, &iterator);
+			object_heap_next(&dd->config_heap, &iterator);
 	}
 
-	object_heap_destroy(&driver_data->config_heap);
+	object_heap_destroy(&dd->config_heap);
 
-	media_pool_delete(driver_data->media_pool);
-	dmabufs_ctrl_delete(driver_data->dmabufs_ctrl);
+	media_pool_delete(dd->media_pool);
+	pollqueue_delete(&dd->pollqueue);
+	dmabufs_ctrl_delete(dd->dmabufs_ctrl);
+	devscan_delete(dd->scan);
 
-	free(context->pDriverData);
-	context->pDriverData = NULL;
+	free(dc->pDriverData);
+	dc->pDriverData = NULL;
 
 	return VA_STATUS_SUCCESS;
 }

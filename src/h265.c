@@ -24,21 +24,16 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "mpeg2.h"
-#include "context.h"
-#include "request.h"
-#include "surface.h"
 
 #include <assert.h>
-#include <string.h>
-#include <inttypes.h>
-
-#include <sys/ioctl.h>
-#include <sys/mman.h>
-
-#include <linux/videodev2.h>
 #include <hevc-ctrls.h>
+#include <inttypes.h>
+#include <string.h>
 
+#include "context.h"
+#include "media.h"
+#include "request.h"
+#include "surface.h"
 #include "v4l2.h"
 
 #define H265_NAL_UNIT_TYPE_SHIFT		1

@@ -155,7 +155,10 @@ VAStatus RequestExportSurfaceHandle(VADriverContextP context,
 
 struct request_data;
 struct object_surface;
-VAStatus queue_await_completion(struct request_data *driver_data, struct object_surface *surface_object, bool last);
+struct mediabufs_ctl;
+struct dmabufs_ctrl;
+
+VAStatus surface_sync(struct request_data *driver_data, struct object_surface *surface_object);
 
 VAStatus surface_attach(struct object_surface *const os,
 			struct mediabufs_ctl *const mbc,

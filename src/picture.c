@@ -209,7 +209,7 @@ static VAStatus bit_block_add(struct bit_stash *const bs,
 }
 
 
-static VAStatus codec_store_buffer(struct qent_base *src_qent,
+static VAStatus codec_store_buffer(struct qent_src *const src_qent,
 				   VAProfile profile,
 				   struct object_surface *const surf,
 				   const VABufferType buftype,
@@ -359,11 +359,11 @@ static VAStatus codec_set_controls(struct request_data *driver_data,
 	return VA_STATUS_SUCCESS;
 }
 
-static VAStatus flush_data(struct request_data *driver_data,
+static VAStatus flush_data(struct request_data *dd,
 			   struct object_context *ctx,
 			   struct object_config *cfg,
 			   struct object_surface *surf,
-			   struct qent_base * src_qent,
+			   struct qent_src *const src_qent,
 			   bool is_last)
 {
 	VAStatus rc;
@@ -371,16 +371,16 @@ static VAStatus flush_data(struct request_data *driver_data,
 
 	surf->needs_flush = false;
 
-	mreq = media_request_get(driver_data->media_pool);
+	mreq = media_request_get(dd->media_pool);
 	if (!mreq) {
-		request_log("media_request_get failed\n");
+		request_err(dd->dc, "media_request_get failed\n");
 		return VA_STATUS_ERROR_ALLOCATION_FAILED;
 	}
 
-	rc = codec_set_controls(driver_data, ctx,
+	rc = codec_set_controls(dd, ctx,
 				cfg->profile, mreq, surf);
 	if (rc != VA_STATUS_SUCCESS) {
-		request_log("codec_set_controls failed\n");
+		request_err(dd->dc, "codec_set_controls failed\n");
 		return rc;
 	}
 
@@ -391,36 +391,28 @@ static VAStatus flush_data(struct request_data *driver_data,
 	surf->source_data = NULL;
 	surf->req_one = false;
 	if (rc != VA_STATUS_SUCCESS) {
-		request_log("mediabufs_start_request failed\n");
+		request_err(dd->dc, "mediabufs_start_request failed\n");
 		return rc;
 	}
-#if 0
-	rc = queue_await_completion(driver_data, surf, is_last);
-	if (rc != VA_STATUS_SUCCESS) {
-		request_log("queue_await_completion failed\n");
-		return rc;
-	}
-#endif
 	return VA_STATUS_SUCCESS;
 }
 
 VAStatus RequestBeginPicture(VADriverContextP context, VAContextID context_id,
 			     VASurfaceID surface_id)
 {
-	struct request_data *driver_data = context->pDriverData;
-	struct object_context *ctx;
-	struct object_surface *surf;
+	struct request_data *const dd = context->pDriverData;
+	struct object_context *const ctx = CONTEXT(dd, context_id);
+	struct object_surface *const surf = SURFACE(dd, surface_id);
+	VAStatus status;
 
-	ctx = CONTEXT(driver_data, context_id);
 	if (ctx == NULL)
 		return VA_STATUS_ERROR_INVALID_CONTEXT;
-
-	surf = SURFACE(driver_data, surface_id);
 	if (surf == NULL)
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 
-	if (surf->status == VASurfaceRendering)
-		RequestSyncSurface(context, surface_id);
+	status = surface_sync(dd, surf);
+	if (status != VA_STATUS_SUCCESS)
+		return status;
 
 	/* *** Move to a better stash point than surface? */
 	if (!surf->bit_stash)
@@ -512,7 +504,7 @@ static VAStatus stream_start(struct request_data *const rd,
 		struct object_surface *surf;
 		surf = SURFACE(rd, ctx->surfaces_ids[i]);
 		if (!surf) {
-			request_log("Surface %#x attached to context not found\n");
+			request_err(rd->dc, "Surface %#x attached to context not found\n");
 		}
 		else {
 			surface_attach(surf, ctx->mbc, rd->dmabufs_ctrl, ctx->base.id);
@@ -530,26 +522,21 @@ static VAStatus stream_start(struct request_data *const rd,
 }
 
 
-VAStatus RequestEndPicture(VADriverContextP context, VAContextID context_id)
+VAStatus RequestEndPicture(VADriverContextP dc, VAContextID context_id)
 {
-	struct request_data *driver_data = context->pDriverData;
-	struct object_context *ctx;
-	struct object_config *cfg;
-	struct object_surface *surf;
+	struct request_data *const dd = dc->pDriverData;
+	struct object_context *const ctx = CONTEXT(dd, context_id);
+	struct object_config *const cfg = CONFIG(dd, ctx->config_id);
+	struct object_surface *const surf = SURFACE(dd, ctx->render_surface_id);
 	VAStatus rv;
 	unsigned int n;
 	unsigned int i;
-	struct qent_base *src_qent = NULL;
+	struct qent_src *src_qent = NULL;
 
-	ctx = CONTEXT(driver_data, context_id);
 	if (ctx == NULL)
 		return VA_STATUS_ERROR_INVALID_CONTEXT;
-
-	cfg = CONFIG(driver_data, ctx->config_id);
 	if (cfg == NULL)
 		return VA_STATUS_ERROR_INVALID_CONFIG;
-
-	surf = SURFACE(driver_data, ctx->render_surface_id);
 	if (surf == NULL)
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 
@@ -568,19 +555,18 @@ VAStatus RequestEndPicture(VADriverContextP context, VAContextID context_id)
 			if (rv != VA_STATUS_SUCCESS)
 				return rv;
 
-			request_log("Start stream\n");
-			rv = stream_start(driver_data, ctx, cfg, surf);
+			rv = stream_start(dd, ctx, cfg, surf);
 			if (rv != VA_STATUS_SUCCESS)
 				return rv;
 			break;
 		}
 		if (!ctx->stream_started) {
-			request_log("No SPS/PPS in picture\n");
+			request_info(dc, "No SPS/PPS in picture\n");
 			return VA_STATUS_ERROR_INVALID_PARAMETER;
 		}
 	}
 
-	rv = surface_attach(surf, ctx->mbc, driver_data->dmabufs_ctrl, context_id);
+	rv = surface_attach(surf, ctx->mbc, dd->dmabufs_ctrl, context_id);
 	if (rv != VA_STATUS_SUCCESS)
 		return rv;
 
@@ -588,7 +574,7 @@ VAStatus RequestEndPicture(VADriverContextP context, VAContextID context_id)
 		if (!src_qent) {
 			src_qent = mediabufs_src_qent_get(ctx->mbc);
 			if (!src_qent) {
-				request_log("Failed to get src qent");
+				request_err(dc, "Failed to get src qent");
 				return VA_STATUS_ERROR_ALLOCATION_FAILED;
 			}
 
@@ -604,15 +590,11 @@ VAStatus RequestEndPicture(VADriverContextP context, VAContextID context_id)
 			return rv;
 
 		if (surf->needs_flush) {
-			rv = flush_data(driver_data, ctx, cfg, surf, src_qent, i + 1 >= n);
+			rv = flush_data(dd, ctx, cfg, surf, src_qent, i + 1 >= n);
 			src_qent = NULL; /* Src ent consumed by being Qed */
 			if (rv != VA_STATUS_SUCCESS)
 				return rv;
 		}
-	}
-
-	if (src_qent) {
-		request_log("Yikes! **** SRC_QENT set\n");
 	}
 
 	ctx->render_surface_id = VA_INVALID_ID;

@@ -24,20 +24,19 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "image.h"
-#include "buffer.h"
-#include "request.h"
-#include "surface.h"
-#include "video.h"
-
 #include <assert.h>
 #include <string.h>
 
+#include "buffer.h"
+#include "drm_fourcc.h"
 #include "dmabufs.h"
+#include "media.h"
+#include "image.h"
+#include "request.h"
+#include "surface.h"
 #include "tiled_yuv.h"
 #include "utils.h"
 #include "v4l2.h"
-#include "drm_fourcc.h"
 
 VAStatus RequestCreateImage(VADriverContextP context, VAImageFormat *format,
 			    int width, int height, VAImage *img)
@@ -317,11 +316,9 @@ VAStatus RequestDeriveImage(VADriverContextP context, VASurfaceID surface_id,
 	if (surface_object == NULL)
 		return VA_STATUS_ERROR_INVALID_SURFACE;
 
-	if (surface_object->status == VASurfaceRendering) {
-		status = RequestSyncSurface(context, surface_id);
-		if (status != VA_STATUS_SUCCESS)
-			return status;
-	}
+	status = surface_sync(driver_data, surface_object);
+	if (status != VA_STATUS_SUCCESS)
+		return status;
 
 	format.fourcc = VA_FOURCC_NV12;
 
@@ -371,6 +368,7 @@ VAStatus RequestGetImage(VADriverContextP context, VASurfaceID surface_id,
 	struct object_surface *surface_object;
 	struct object_image *image_object;
 	VAImage *image;
+	VAStatus status;
 
 	surface_object = SURFACE(driver_data, surface_id);
 	if (surface_object == NULL)
@@ -383,6 +381,10 @@ VAStatus RequestGetImage(VADriverContextP context, VASurfaceID surface_id,
 	image = &image_object->image;
 	if (x != 0 || y != 0 || width != image->width || height != image->height)
 		return VA_STATUS_ERROR_UNIMPLEMENTED;
+
+	status = surface_sync(driver_data, surface_object);
+	if (status != VA_STATUS_SUCCESS)
+		return status;
 
 	return copy_surface_to_image(driver_data, surface_object, image);
 }

@@ -24,25 +24,19 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "buffer.h"
-#include "context.h"
-#include "request.h"
-#include "surface.h"
-#include "video.h"
-
-#include <unistd.h>
-#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include <sys/ioctl.h>
-#include <sys/mman.h>
+#include <unistd.h>
 
 #include <va/va_drmcommon.h>
 #include <linux/videodev2.h>
 
+#include "buffer.h"
+#include "context.h"
+#include "media.h"
+#include "request.h"
+#include "surface.h"
 #include "utils.h"
-#include "v4l2.h"
 
 VAStatus RequestCreateBuffer(VADriverContextP context, VAContextID context_id,
 			     VABufferType type, unsigned int size,

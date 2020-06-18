@@ -27,17 +27,14 @@
 #ifndef _V4L2_REQUEST_H_
 #define _V4L2_REQUEST_H_
 
-#include <stdbool.h>
-
-#include "context.h"
-#include "object_heap.h"
-#include "video.h"
-#include "media.h"
-#include <va/va.h>
-
-#include <linux/videodev2.h>
 #include <stdatomic.h>
+#include <va/va_backend.h>
 
+#include "object_heap.h"
+
+struct devscan;
+struct pollqueue;
+struct media_pool;
 struct dmabufs_ctrl;
 
 #define V4L2_REQUEST_STR_VENDOR			"v4l2-request"
@@ -50,18 +47,19 @@ struct dmabufs_ctrl;
 #define V4L2_REQUEST_MAX_DISPLAY_ATTRIBUTES	4
 
 struct request_data {
-	struct object_heap config_heap;
-	struct object_heap context_heap;
-	struct object_heap buffer_heap;
-	struct object_heap image_heap;
-
-	struct object_heap surface_heap;
+	VADriverContextP dc;
 	atomic_uint surface_alloc_seq;
 
 	struct devscan *scan;
 	struct pollqueue *pollqueue;
 	struct media_pool *media_pool;
 	struct dmabufs_ctrl *dmabufs_ctrl;
+
+	struct object_heap config_heap;
+	struct object_heap context_heap;
+	struct object_heap buffer_heap;
+	struct object_heap image_heap;
+	struct object_heap surface_heap;
 };
 
 VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP context);
