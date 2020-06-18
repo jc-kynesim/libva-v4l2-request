@@ -32,7 +32,7 @@
 #include <va/va_backend.h>
 
 #include "object_heap.h"
-#include "v4l2.h"
+#include "video.h"
 
 struct dmabuf_h;
 

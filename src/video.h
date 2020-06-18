@@ -27,9 +27,39 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <linux/videodev2.h>
 #include <va/va_backend.h>
 
-enum v4l2_buf_type;
+struct picdesc {
+	/* Requested values */
+	unsigned int req_width;
+	unsigned int req_height;
+	unsigned int req_rtfmt;
+
+	/* Actual values */
+	uint32_t     fmt_v4l2;  /* V4l2 actual format */
+	enum v4l2_buf_type type_v4l2; /* V4L2 format type */
+	unsigned int fmt_drm;   /* DRM export format */
+	unsigned int rtfmt_vaapi; /* Vaapi RT format */
+	unsigned int fmt_vaapi; /* Vaapi export format, may need conversion */
+	unsigned int buffer_count;
+	unsigned int plane_count;
+	bool is_linear;
+	struct bufdesc {
+		size_t size;
+		uint64_t drm_mod;
+	} bufs[VIDEO_MAX_PLANES];
+	struct planedesc {
+		unsigned int buf;
+		unsigned int width;
+		unsigned int height;
+		unsigned int col_height;
+		size_t stride;
+		size_t offset;
+	} planes[VIDEO_MAX_PLANES];
+};
+
+int video_dst_fmt_to_picdesc(struct picdesc * pd, const struct v4l2_format * fmt);
 
 uint32_t video_profile_to_src_pixfmt(const VAProfile profile);
 

@@ -102,7 +102,7 @@ VAStatus surface_attach(struct object_surface *const os,
 		return VA_STATUS_ERROR_ALLOCATION_FAILED;
 	}
 
-	v4l2_format_to_picdesc(&os->pd, mediabufs_dst_fmt(mbc));
+	video_dst_fmt_to_picdesc(&os->pd, mediabufs_dst_fmt(mbc));
 
 	os->context_id = id;
 	return VA_STATUS_SUCCESS;

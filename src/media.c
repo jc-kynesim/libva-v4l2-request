@@ -831,7 +831,11 @@ void qent_dst_delete(struct qent_dst *const be_dst)
 struct qent_dst* mediabufs_dst_qent_alloc(struct mediabufs_ctl *const mbc, struct dmabufs_ctrl *const dbsc)
 {
 	struct qent_dst *const be_dst = malloc(sizeof(*be_dst));
-	int rv;
+	struct v4l2_create_buffers cbuf = {
+		.count = 1,
+		.memory = V4L2_MEMORY_DMABUF,
+		.format = mbc->dst_fmt,
+	};
 
 	if (!be_dst)
 		return NULL;
@@ -845,9 +849,14 @@ struct qent_dst* mediabufs_dst_qent_alloc(struct mediabufs_ctl *const mbc, struc
 	if (qe_alloc_from_fmt(&be_dst->base, dbsc, &mbc->dst_fmt))
 		goto fail;
 
-	rv = v4l2_create_buffers(mbc->vfd, mbc->dst_fmt.type, V4L2_MEMORY_DMABUF, 1, &be_dst->base.index);
-	if (rv < 0)
-		goto fail;
+	while (ioctl(mbc->vfd, VIDIOC_CREATE_BUFS, &cbuf)) {
+		if (errno != EINTR) {
+			request_err(mbc->dc, "%s: Failed to create V4L2 buffer\n", __func__);
+			goto fail;
+		}
+	}
+
+	be_dst->base.index = cbuf.index;
 
 	return be_dst;
 
