@@ -85,7 +85,8 @@ cflags = [
 deps = [
 	kernel_headers_dep,
 	libva_dep,
-	libdrm_dep
+	libdrm_dep,
+	libudev_dep
 ]
 
 v4l2_request_drv_video = shared_module('v4l2_request_drv_video',

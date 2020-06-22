@@ -62,6 +62,7 @@ endif
 
 libva_dep = dependency('libva', version : '>= 1.1.0')
 libdrm_dep = dependency('libdrm', version : '>= 2.4.52')
+libudev_dep = dependency('libudev')
 
 va_api_version_array = libva_dep.version().split('.')
 va_api_major_version = va_api_version_array[0]
